@@ -1,0 +1,44 @@
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test output
+*.test
+*.out
+coverage.html
+coverage.txt
+
+# Logs
+logs/
+*.log
+
+# Build artifacts
+dist/
+
+# Environment files (keep .env.dev/.env.prod as templates)
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go workspace
+go.work
+go.work.sum
+
+# Swagger generated (can be regenerated)
+docs/docs.go
+docs/swagger.json
+docs/swagger.yaml
+
+# 本地环境变量（含真实密码）
+*.env.local
