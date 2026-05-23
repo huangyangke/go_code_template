@@ -20,10 +20,11 @@ type Config struct {
 
 type Breaker interface {
 	Do(run func() error, fallback func(error) error) error
+	Allow() (done func(success bool), err error)
 }
 
 type gobreakerBreaker struct {
-	cb *gobreaker.CircuitBreaker
+	cb *gobreaker.TwoStepCircuitBreaker
 }
 
 func New(c *Config) Breaker {
@@ -49,7 +50,7 @@ func New(c *Config) Breaker {
 	threshold := uint32(c.RequestVolumeThreshold)
 	errPct := float64(c.ErrorPercentThreshold) / 100.0
 
-	cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{
+	cb := gobreaker.NewTwoStepCircuitBreaker(gobreaker.Settings{
 		Name:        c.Name,
 		MaxRequests: c.MaxRequests,
 		Interval:    c.Interval,
@@ -75,22 +76,39 @@ func IsCircuitOpen(err error) bool {
 	return errors.Is(err, gobreaker.ErrOpenState) || errors.Is(err, gobreaker.ErrTooManyRequests)
 }
 
-func (b *gobreakerBreaker) Do(run func() error, fallback func(error) error) error {
-	name := b.cb.Name()
-	_, err := b.cb.Execute(func() (interface{}, error) {
-		return nil, run()
-	})
+func (b *gobreakerBreaker) Allow() (func(success bool), error) {
+	done, err := b.cb.Allow()
 	if err != nil {
 		if IsCircuitOpen(err) {
-			metrics.ObserveCircuitBreakerCall(name, "rejected")
-		} else {
-			metrics.ObserveCircuitBreakerCall(name, "failure")
+			metrics.ObserveCircuitBreakerCall(b.cb.Name(), "rejected")
 		}
+		return nil, err
+	}
+	return func(success bool) {
+		if success {
+			metrics.ObserveCircuitBreakerCall(b.cb.Name(), "success")
+		} else {
+			metrics.ObserveCircuitBreakerCall(b.cb.Name(), "failure")
+		}
+		done(success)
+	}, nil
+}
+
+func (b *gobreakerBreaker) Do(run func() error, fallback func(error) error) error {
+	done, err := b.Allow()
+	if err != nil {
 		if fallback != nil {
 			return fallback(err)
 		}
 		return err
 	}
-	metrics.ObserveCircuitBreakerCall(name, "success")
+	if err := run(); err != nil {
+		done(false)
+		if fallback != nil {
+			return fallback(err)
+		}
+		return err
+	}
+	done(true)
 	return nil
 }
