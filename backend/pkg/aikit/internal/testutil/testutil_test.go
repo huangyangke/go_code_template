@@ -3,6 +3,7 @@ package testutil_test
 import (
 	"context"
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -47,6 +48,22 @@ func TestNewSQLiteDB(t *testing.T) {
 	assert.Equal(t, "test", item.Name)
 }
 
+func TestNewSQLiteDBWithModels(t *testing.T) {
+	type Product struct {
+		ID    uint
+		Title string
+		Price float64
+	}
+	db := testutil.NewSQLiteDBWithModels(t, &Product{})
+
+	require.NoError(t, db.Create(&Product{Title: "widget", Price: 9.99}).Error)
+
+	var p Product
+	require.NoError(t, db.First(&p).Error)
+	assert.Equal(t, "widget", p.Title)
+	assert.InDelta(t, 9.99, p.Price, 0.001)
+}
+
 func TestNewGinRouter(t *testing.T) {
 	r := testutil.NewGinRouter(t)
 	require.NotNil(t, r)
@@ -61,7 +78,53 @@ func TestNewGinRouter(t *testing.T) {
 	assert.Equal(t, "pong", w.Body.String())
 }
 
-func TestNewTempConfig(t *testing.T) {
-	path := testutil.NewTempConfig(t, "key: value")
-	assert.FileExists(t, path)
+func TestServeRequest_NotFound(t *testing.T) {
+	r := testutil.NewGinRouter(t)
+	req, _ := http.NewRequest("GET", "/no-such-route", nil)
+	w := testutil.ServeRequest(r, req)
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
+
+func TestNewTempConfig(t *testing.T) {
+	content := "key: value\nother: 123"
+	path := testutil.NewTempConfig(t, content)
+
+	assert.FileExists(t, path)
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, content, string(got))
+}
+
+func TestNewJSONRequest(t *testing.T) {
+	type payload struct {
+		Name string `json:"name"`
+	}
+
+	r := testutil.NewGinRouter(t)
+	r.POST("/echo", func(c *gin.Context) {
+		var p payload
+		if err := c.ShouldBindJSON(&p); err != nil {
+			c.String(http.StatusBadRequest, err.Error())
+			return
+		}
+		c.String(http.StatusOK, p.Name)
+	})
+
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/echo", payload{Name: "hello"})
+	w := testutil.ServeRequest(r, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "hello", w.Body.String())
+}
+
+func TestNewJSONRequest_NilBody(t *testing.T) {
+	r := testutil.NewGinRouter(t)
+	r.DELETE("/item", func(c *gin.Context) {
+		c.String(http.StatusNoContent, "")
+	})
+
+	req := testutil.NewJSONRequest(t, http.MethodDelete, "/item", nil)
+	assert.Equal(t, "application/json", req.Header.Get("Content-Type"))
+	w := testutil.ServeRequest(r, req)
+	assert.Equal(t, http.StatusNoContent, w.Code)
+}
+

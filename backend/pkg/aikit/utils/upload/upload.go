@@ -15,8 +15,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/gabriel-vasile/mimetype"
 	cos "github.com/tencentyun/cos-go-sdk-v5"
 	"github.com/xxtea/xxtea-go/xxtea"
 )
@@ -32,9 +34,9 @@ type Config struct {
 
 // UploadResult 上传结果
 type UploadResult struct {
-	KeyInfo  *KeyInfo `json:"key_info"`
-	URL      string   `json:"url"`
-	FileID   int64    `json:"file_id"`
+	KeyInfo *KeyInfo `json:"key_info"`
+	URL     string   `json:"url"`
+	FileID  int64    `json:"file_id"`
 }
 
 // BucketInfo 云存储桶信息
@@ -302,6 +304,12 @@ func CalcCRC64(data []byte) string {
 }
 
 func DetectExt(data []byte) string {
+	if len(data) == 0 {
+		return "unknown"
+	}
+	if bytes.HasPrefix(data, []byte("BM")) {
+		return "bmp"
+	}
 	if len(data) < 4 {
 		return "unknown"
 	}
@@ -314,12 +322,21 @@ func DetectExt(data []byte) string {
 		return "wav"
 	case bytes.HasPrefix(data, []byte("ID3")) || bytes.HasPrefix(data, []byte("\xff\xfb")):
 		return "mp3"
-	case bytes.HasPrefix(data, []byte("BM")):
-		return "bmp"
 	case bytes.HasPrefix(data, []byte("GIF87a")) || bytes.HasPrefix(data, []byte("GIF89a")):
 		return "gif"
 	case bytes.HasPrefix(data, []byte("RIFF")) && len(data) >= 12 && string(data[8:12]) == "WEBP":
 		return "webp"
+	}
+
+	if ext := strings.TrimPrefix(mimetype.Detect(data).Extension(), "."); ext != "" {
+		switch ext {
+		case "jpeg":
+			return "jpg"
+		case "plain": // 不能区分markdown、json等文本文件格式
+			return "txt"
+		default:
+			return ext
+		}
 	}
 	return "unknown"
 }
@@ -347,11 +364,4 @@ func buildForm(fields map[string]string, fileField, fileName string, fileData []
 	fw.Write(fileData)
 	w.Close()
 	return &buf, w.FormDataContentType(), nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

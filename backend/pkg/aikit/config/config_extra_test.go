@@ -230,3 +230,119 @@ func TestGet_Default(t *testing.T) {
 	assert.Nil(t, ldr.Get("nonexistent"))
 	assert.Equal(t, "default", ldr.Get("nonexistent", "default"))
 }
+
+func TestGetMap_ReturnsCopy(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+app:
+  name: test
+  nested:
+    enabled: true
+`), 0644))
+
+	ldr, err := New(path)
+	require.NoError(t, err)
+
+	m := ldr.GetMap("app")
+	m["name"] = "changed"
+	m["nested"].(map[string]interface{})["enabled"] = false
+
+	assert.Equal(t, "test", ldr.GetString("app.name"))
+	assert.True(t, ldr.GetBool("app.nested.enabled"))
+}
+
+func TestRaw_ReturnsDeepCopy(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+app:
+  name: test
+  nested:
+    enabled: true
+`), 0644))
+
+	ldr, err := New(path)
+	require.NoError(t, err)
+
+	raw := ldr.Raw()
+	raw["app"].(map[string]interface{})["name"] = "changed"
+	raw["app"].(map[string]interface{})["nested"].(map[string]interface{})["enabled"] = false
+
+	assert.Equal(t, "test", ldr.GetString("app.name"))
+	assert.True(t, ldr.GetBool("app.nested.enabled"))
+}
+
+func TestDump_ReturnsDeepCopy(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+app:
+  name: test
+  nested:
+    enabled: true
+`), 0644))
+
+	ldr, err := New(path)
+	require.NoError(t, err)
+
+	dump := ldr.Dump()
+	cfg := dump["config"].(map[string]interface{})
+	cfg["app"].(map[string]interface{})["name"] = "changed"
+	cfg["app"].(map[string]interface{})["nested"].(map[string]interface{})["enabled"] = false
+
+	assert.Equal(t, "test", ldr.GetString("app.name"))
+	assert.True(t, ldr.GetBool("app.nested.enabled"))
+}
+
+func TestVariableSubstitution_RecursesIntoArrayItems(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.Setenv("APP_HOST", "example.com")
+	defer os.Unsetenv("APP_HOST")
+
+	require.NoError(t, os.WriteFile(path, []byte(`
+servers:
+  - name: api
+    url: "https://${APP_HOST}"
+  - "${APP_HOST}"
+`), 0644))
+
+	ldr, err := New(path)
+	require.NoError(t, err)
+
+	servers := ldr.Get("servers").([]interface{})
+	first := servers[0].(map[string]interface{})
+	assert.Equal(t, "https://example.com", first["url"])
+	assert.Equal(t, "example.com", servers[1])
+}
+
+func TestWatch_HandlesAtomicReplace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("val: 1"), 0644))
+
+	ldr, err := New(path)
+	require.NoError(t, err)
+	defer ldr.Close()
+
+	called := make(chan struct{}, 2)
+	require.NoError(t, ldr.Watch(func() {
+		select {
+		case called <- struct{}{}:
+		default:
+		}
+	}))
+
+	tmp := filepath.Join(dir, "config.yaml.tmp")
+	require.NoError(t, os.WriteFile(tmp, []byte("val: 2"), 0644))
+	require.NoError(t, os.Rename(tmp, path))
+	require.NoError(t, os.WriteFile(path, []byte("val: 3"), 0644))
+
+	select {
+	case <-called:
+		assert.Equal(t, 3, ldr.GetInt("val"))
+	case <-time.After(2 * time.Second):
+		t.Fatal("watch callback not triggered after atomic replace")
+	}
+}

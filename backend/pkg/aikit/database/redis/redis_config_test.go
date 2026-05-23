@@ -6,7 +6,7 @@ import (
 )
 
 func TestConfig_Fix(t *testing.T) {
-	c := &Config{Addrs: []string{"127.0.0.1:6379"}}
+	c := &Config{Name: "test", Addrs: []string{"127.0.0.1:6379"}}
 	c.Fix()
 
 	if c.Type != ClusterType {
@@ -74,11 +74,18 @@ func TestConfig_Validate_SentinelNoMaster(t *testing.T) {
 	}
 }
 
+func TestConfig_Validate_NoName(t *testing.T) {
+	c := &Config{Addrs: []string{"127.0.0.1:6379"}, Type: StandaloneType}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error for empty Name")
+	}
+}
+
 func TestConfig_Validate_Valid(t *testing.T) {
 	c := &Config{
-		Addrs:      []string{"127.0.0.1:6379"},
-		Type:       StandaloneType,
-		MasterName: "",
+		Name:  "my-redis",
+		Addrs: []string{"127.0.0.1:6379"},
+		Type:  StandaloneType,
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -86,13 +93,23 @@ func TestConfig_Validate_Valid(t *testing.T) {
 }
 
 func TestConfig_fix_Panics(t *testing.T) {
+	t.Run("no name", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic for empty Name")
+			}
+		}()
+		c := &Config{Addrs: []string{"127.0.0.1:6379"}, Type: StandaloneType}
+		c.fix()
+	})
+
 	t.Run("no addrs", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r == nil {
 				t.Fatal("expected panic for empty Addrs")
 			}
 		}()
-		c := &Config{}
+		c := &Config{Name: "test"}
 		c.fix()
 	})
 
@@ -103,6 +120,7 @@ func TestConfig_fix_Panics(t *testing.T) {
 			}
 		}()
 		c := &Config{
+			Name:  "test",
 			Addrs: []string{"127.0.0.1:26379"},
 			Type:  SentinelType,
 		}

@@ -14,8 +14,8 @@ import (
 	"github.com/mgtv-tech/jetcache-go/local"
 	"github.com/mgtv-tech/jetcache-go/remote"
 	"github.com/mgtv-tech/jetcache-go/stats"
+	"github.com/redis/go-redis/v9"
 
-	dbredis "github.com/example/go-template/pkg/aikit/database/redis"
 	"github.com/example/go-template/pkg/aikit/log"
 	"github.com/example/go-template/pkg/aikit/metrics"
 )
@@ -51,7 +51,7 @@ type Config struct {
 	LocalMaxSize    int             `yaml:"local_max_size"` // LRU/TTL compat: max entries; TinyLFU: item count
 	LocalTTL        int             `yaml:"local_ttl"`      // seconds
 	RemoteTTL       int             `yaml:"remote_ttl"`     // seconds
-	RedisConfig     *dbredis.Config `yaml:"redis_config"`
+	RedisCmdable    redis.Cmdable   `yaml:"-"`              // Redis connection to use for remote cache
 	EnableRefresh   bool            `yaml:"enable_refresh"`   // Backward compat: maps to RefreshDuration > 0
 	RefreshInterval int             `yaml:"refresh_interval"` // Backward compat: maps to RefreshDuration
 	NullValueTTL    int             `yaml:"null_value_ttl"`   // seconds
@@ -81,8 +81,8 @@ var (
 type MultiLevelCache struct {
 	config      Config
 	cache       jcache.Cache
-	redisClient *dbredis.Redis
-	pubsub      *dbredis.PubSub
+	redisCmdable redis.Cmdable
+	pubsub      *redis.PubSub
 	stopCh      chan struct{}
 	closeOnce   sync.Once
 	instanceID  string
@@ -247,13 +247,10 @@ func New(cfg Config) (*MultiLevelCache, error) {
 
 	// Create remote cache backend (for remote or both mode)
 	if cfg.CacheType == CacheTypeRemote || cfg.CacheType == CacheTypeBoth {
-		remoteClient, err := m.initRedisClient()
-		if err != nil {
-			return nil, err
-		}
-		if remoteClient != nil {
+		if cfg.RedisCmdable != nil {
+			m.redisCmdable = cfg.RedisCmdable
 			opts = append(opts, jcache.WithRemote(
-				remote.NewGoRedisV9Adapter(remoteClient.Cmdable()),
+				remote.NewGoRedisV9Adapter(cfg.RedisCmdable),
 			))
 		}
 	}
@@ -269,7 +266,7 @@ func New(cfg Config) (*MultiLevelCache, error) {
 	m.cache = jcache.New(opts...)
 
 	// Legacy Pub/Sub invalidation (when SyncLocal is false but EventChannel is set)
-	if cfg.CacheType == CacheTypeBoth && !cfg.SyncLocal && cfg.EventChannel != "" && m.redisClient != nil {
+	if cfg.CacheType == CacheTypeBoth && !cfg.SyncLocal && cfg.EventChannel != "" && m.redisCmdable != nil {
 		go m.startEventSubscription()
 	}
 
@@ -297,15 +294,17 @@ func (m *MultiLevelCache) newLocalCache() local.Local {
 	}
 }
 
-// initRedisClient initializes the Redis client for remote cache.
-func (m *MultiLevelCache) initRedisClient() (*dbredis.Redis, error) {
-	if m.config.RedisConfig == nil {
-		return nil, nil
+
+// subscribeRedis subscribes to a channel. redis.Cmdable does not include
+// Subscribe, so we type-assert to the concrete client types.
+func (m *MultiLevelCache) subscribeRedis(ctx context.Context, channel string) *redis.PubSub {
+	switch c := m.redisCmdable.(type) {
+	case *redis.Client:
+		return c.Subscribe(ctx, channel)
+	case *redis.ClusterClient:
+		return c.Subscribe(ctx, channel)
 	}
-	rdb := dbredis.New(m.config.RedisConfig)
-	m.redisClient = rdb
-	log.Info("[Cache][%s/%s][redis_connected]", m.config.Family, m.config.Name)
-	return rdb, nil
+	return nil
 }
 
 // buildKey constructs the full cache key used for both local and remote.
@@ -412,21 +411,21 @@ func (m *MultiLevelCache) Exists(ctx context.Context, key string) bool {
 // Clear removes all cache entries
 func (m *MultiLevelCache) Clear(ctx context.Context) error {
 	var remoteErr error
-	if m.redisClient != nil {
+	if m.redisCmdable != nil {
 		pattern := "aikit:cache:" + m.config.Family + ":" + m.config.Name + ":*"
 		if m.config.Family == "" {
 			pattern = "aikit:cache:" + m.config.Name + ":*"
 		}
 		var cursor uint64
 		for {
-			keys, newCursor, err := m.redisClient.Cmdable().Scan(ctx, cursor, pattern, 100).Result()
+			keys, newCursor, err := m.redisCmdable.Scan(ctx, cursor, pattern, 100).Result()
 			if err != nil {
 				log.Warn("[Cache][%s/%s][clear_scan_error]: %v", m.config.Family, m.config.Name, err)
 				remoteErr = err
 				break
 			}
 			if len(keys) > 0 {
-				if err := m.redisClient.Cmdable().Del(ctx, keys...).Err(); err != nil {
+				if err := m.redisCmdable.Del(ctx, keys...).Err(); err != nil {
 					log.Warn("[Cache][%s/%s][clear_delete_error][count=%d]: %v",
 						m.config.Family, m.config.Name, len(keys), err)
 					remoteErr = err
@@ -456,9 +455,6 @@ func (m *MultiLevelCache) Close() error {
 	if m.pubsub != nil {
 		_ = m.pubsub.Close()
 	}
-	if m.redisClient != nil {
-		_ = m.redisClient.Close()
-	}
 	log.Info("[Cache][%s/%s][closed]", m.config.Family, m.config.Name)
 	return nil
 }
@@ -467,7 +463,7 @@ func (m *MultiLevelCache) Close() error {
 // When SyncLocal is enabled, jetcache-go sends events on Set/Delete.
 // We publish these to Redis Pub/Sub for cross-instance propagation.
 func (m *MultiLevelCache) handleSyncLocalEvent(event *jcache.Event) {
-	if m.redisClient == nil || m.config.EventChannel == "" {
+	if m.redisCmdable == nil || m.config.EventChannel == "" {
 		return
 	}
 	data, err := json.Marshal(map[string]interface{}{
@@ -480,18 +476,17 @@ func (m *MultiLevelCache) handleSyncLocalEvent(event *jcache.Event) {
 		log.Warn("[Cache][%s/%s][sync_local_marshal_error]: %v", m.config.Family, m.config.Name, err)
 		return
 	}
-	if err := m.redisClient.Cmdable().Publish(context.Background(), m.config.EventChannel, string(data)).Err(); err != nil {
+	if err := m.redisCmdable.Publish(context.Background(), m.config.EventChannel, string(data)).Err(); err != nil {
 		log.Warn("[Cache][%s/%s][sync_local_publish_error]: %v", m.config.Family, m.config.Name, err)
 	}
 }
 
 // startEventSubscription listens for invalidate events from Redis Pub/Sub (legacy mode).
 func (m *MultiLevelCache) startEventSubscription() {
-	if m.redisClient == nil {
+	if m.redisCmdable == nil {
 		return
 	}
-	cmd := m.redisClient.Cmdable()
-	pubsub := dbredis.NewPubSub(cmd, m.config.EventChannel)
+	pubsub := m.subscribeRedis(context.Background(), m.config.EventChannel)
 	if pubsub == nil {
 		return
 	}
@@ -556,11 +551,10 @@ func (m *MultiLevelCache) handleEvent(data string) {
 // resubscribeEvents attempts to re-subscribe after a disconnection.
 func (m *MultiLevelCache) resubscribeEvents() {
 	time.Sleep(1 * time.Second)
-	if m.redisClient == nil {
+	if m.redisCmdable == nil {
 		return
 	}
-	cmd := m.redisClient.Cmdable()
-	pubsub := dbredis.NewPubSub(cmd, m.config.EventChannel)
+	pubsub := m.subscribeRedis(context.Background(), m.config.EventChannel)
 	if pubsub == nil {
 		return
 	}
@@ -595,7 +589,7 @@ func cacheName(family, name string) string {
 	if family == "" {
 		return name
 	}
-	return family + ":" + name
+	return family + "/" + name
 }
 
 // ============================================================================
@@ -610,7 +604,7 @@ func GetCache(
 	localMaxSize int,
 	localTTL int,
 	remoteTTL int,
-	redisConfig *dbredis.Config,
+	redisCmdable redis.Cmdable,
 ) (*MultiLevelCache, error) {
 	if family == "" {
 		return nil, ErrFamilyRequired
@@ -639,7 +633,7 @@ func GetCache(
 		LocalMaxSize: localMaxSize,
 		LocalTTL:     localTTL,
 		RemoteTTL:    remoteTTL,
-		RedisConfig:  redisConfig,
+		RedisCmdable: redisCmdable,
 	}
 
 	c, err := New(cfg)
@@ -701,4 +695,4 @@ func (e *ConfigError) Error() string {
 }
 
 // Ensure metrics package is referenced (stats_handler.go uses it, but keep import valid)
-var _ = metrics.ObserveCacheHit
+var _ = metrics.ObserveCache

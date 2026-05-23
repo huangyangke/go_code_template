@@ -1,6 +1,9 @@
 package testutil
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,6 +35,7 @@ func NewRedis(t *testing.T) (*dbredis.Redis, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
 	r := dbredis.New(&dbredis.Config{
+		Name:  "testutil",
 		Type:  dbredis.StandaloneType,
 		Addrs: []string{mr.Addr()},
 	})
@@ -79,4 +83,33 @@ func NewTempConfig(t *testing.T, content string) string {
 		t.Fatalf("testutil: write config: %v", err)
 	}
 	return path
+}
+
+// NewSQLiteDBWithModels creates an in-memory SQLite database and runs AutoMigrate on models.
+func NewSQLiteDBWithModels(t *testing.T, models ...any) *gorm.DB {
+	t.Helper()
+	db := NewSQLiteDB(t)
+	if err := db.AutoMigrate(models...); err != nil {
+		t.Fatalf("testutil: auto migrate: %v", err)
+	}
+	return db
+}
+
+// NewJSONRequest builds an HTTP request with a JSON body and Content-Type header.
+func NewJSONRequest(t *testing.T, method, path string, body any) *http.Request {
+	t.Helper()
+	var r io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("testutil: marshal request body: %v", err)
+		}
+		r = bytes.NewReader(b)
+	}
+	req, err := http.NewRequest(method, path, r)
+	if err != nil {
+		t.Fatalf("testutil: new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return req
 }

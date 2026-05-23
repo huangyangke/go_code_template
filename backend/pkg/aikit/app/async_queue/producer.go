@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"sync"
 	"time"
 
@@ -265,8 +264,8 @@ func (p *Producer) handleEnqueue(ep string) gin.HandlerFunc {
 		var params map[string]any
 		if err := c.ShouldBindJSON(&params); err != nil {
 			log.Warn("[Producer][%s][request_bind_error][task_id=%s]: %v", ep, taskID, err)
-			response.ParamError(c, err.Error())
-			metrics.GetAsyncQueueEnqueueCounter().Inc(p.namespace, ep, "failure")
+			response.ParamError(c)
+			metrics.ObserveAsyncQueueEnqueue(ep, "failure")
 			return
 		}
 
@@ -275,8 +274,8 @@ func (p *Producer) handleEnqueue(ep string) gin.HandlerFunc {
 		paramsJSON, err := json.Marshal(params)
 		if err != nil {
 			log.Error("[Producer][%s][request_marshal_error][task_id=%s]: %v", ep, taskID, err)
-			response.InternalError(c, "参数序列化失败")
-			metrics.GetAsyncQueueEnqueueCounter().Inc(p.namespace, ep, "failure")
+			response.InternalError(c)
+			metrics.ObserveAsyncQueueEnqueue(ep, "failure")
 			return
 		}
 
@@ -286,13 +285,13 @@ func (p *Producer) handleEnqueue(ep string) gin.HandlerFunc {
 		if err := p.statusStore.InitQueued(ctx, taskID, ep, priority); err != nil {
 			if err.Error() == fmt.Sprintf("task with task_id=%s already exists", taskID) {
 				log.Warn("[Producer][%s][duplicate_task_id][task_id=%s]", ep, taskID)
-				response.Conflict(c, "task_id already exists")
-				metrics.GetAsyncQueueEnqueueCounter().Inc(p.namespace, ep, "duplicate")
+				response.Conflict(c)
+				metrics.ObserveAsyncQueueEnqueue(ep, "duplicate")
 				return
 			}
 			log.Error("[Producer][%s][status_init_error][task_id=%s]: %v", ep, taskID, err)
-			response.InternalError(c, "任务状态初始化失败")
-			metrics.GetAsyncQueueEnqueueCounter().Inc(p.namespace, ep, "failure")
+			response.InternalError(c)
+			metrics.ObserveAsyncQueueEnqueue(ep, "failure")
 			return
 		}
 
@@ -309,8 +308,8 @@ func (p *Producer) handleEnqueue(ep string) gin.HandlerFunc {
 			// Clean up status if we fail to enqueue
 			p.statusStore.rdb.Del(ctx, p.statusStore.key(taskID))
 			log.Error("[Producer][%s][enqueue_error][task_id=%s]: %v", ep, taskID, err)
-			response.InternalError(c, "任务入队失败")
-			metrics.GetAsyncQueueEnqueueCounter().Inc(p.namespace, ep, "failure")
+			response.InternalError(c)
+			metrics.ObserveAsyncQueueEnqueue(ep, "failure")
 			return
 		}
 
@@ -325,7 +324,7 @@ func (p *Producer) handleEnqueue(ep string) gin.HandlerFunc {
 			_ = p.statusStore.PublishTaskEvent(context.Background(), taskID, ts)
 		}()
 
-		metrics.GetAsyncQueueEnqueueCounter().Inc(p.namespace, ep, "success")
+		metrics.ObserveAsyncQueueEnqueue(ep, "success")
 		log.Info("[Producer][%s][request][task_id=%s][priority=%d]", ep, taskID, priority)
 		response.JSON(c, nil, taskID)
 	}
@@ -337,12 +336,12 @@ func (p *Producer) handleStatus(c *gin.Context) {
 	ts, err := p.statusStore.Get(c.Request.Context(), taskID)
 	if err != nil {
 		log.Error("[Producer][status][query_error][task_id=%s]: %v", taskID, err)
-		response.InternalError(c, err.Error())
+		response.InternalError(c)
 		return
 	}
 	if ts == nil {
 		log.Warn("[Producer][status][not_found][task_id=%s]", taskID)
-		response.NotFound(c, "task not found")
+		response.NotFound(c)
 		return
 	}
 	response.JSON(c, ts, taskID)
@@ -357,12 +356,12 @@ func (p *Producer) handleCancel(c *gin.Context) {
 	status, err := p.statusStore.Get(ctx, taskID)
 	if err != nil {
 		log.Error("[Producer][cancel][query_error][task_id=%s]: %v", taskID, err)
-		response.InternalError(c, err.Error())
+		response.InternalError(c)
 		return
 	}
 	if status == nil {
 		log.Warn("[Producer][cancel][not_found][task_id=%s]", taskID)
-		response.NotFound(c, "task not found")
+		response.NotFound(c)
 		return
 	}
 
@@ -371,7 +370,7 @@ func (p *Producer) handleCancel(c *gin.Context) {
 		status.Status == TaskStatusFailed ||
 		status.Status == TaskStatusCancelled {
 		log.Warn("[Producer][cancel][terminal][task_id=%s][status=%s]", taskID, status.Status)
-		response.Conflict(c, "task is already in terminal state")
+		response.Conflict(c)
 		return
 	}
 
@@ -379,7 +378,7 @@ func (p *Producer) handleCancel(c *gin.Context) {
 	cancelKey := buildCancelKey(p.namespace, taskID)
 	if err := p.rdb.Set(ctx, cancelKey, "1", TaskCancelTTL).Err(); err != nil {
 		log.Error("[Producer][cancel][set_key_error][task_id=%s]: %v", taskID, err)
-		response.InternalError(c, "取消失败")
+		response.InternalError(c)
 		return
 	}
 
@@ -399,11 +398,7 @@ func (p *Producer) handleCancel(c *gin.Context) {
 		log.Info("[Producer][cancel][running][task_id=%s][status=%s]", taskID, status.Status)
 	}
 
-	c.JSON(http.StatusOK, response.ApiResponse{
-		Code:   response.CodeSuccess,
-		Msg:    "取消信号已发送",
-		TaskID: taskID,
-	})
+	response.JSON(c, nil, taskID, "取消信号已发送")
 }
 
 // parseTaskPriority 解析 X-Task-Priority header，范围 0-9，默认 5

@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/sony/gobreaker"
+
+	"github.com/example/go-template/pkg/aikit/metrics"
 )
 
 type Config struct {
@@ -32,7 +34,7 @@ func New(c *Config) Breaker {
 		c.MaxRequests = 1
 	}
 	if c.RequestVolumeThreshold <= 0 {
-		c.RequestVolumeThreshold = 20
+		c.RequestVolumeThreshold = 5
 	}
 	if c.SleepWindow <= 0 {
 		c.SleepWindow = 5 * time.Second
@@ -59,6 +61,9 @@ func New(c *Config) Breaker {
 			failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
 			return failureRatio >= errPct
 		},
+		OnStateChange: func(name string, from, to gobreaker.State) {
+			metrics.ObserveCircuitBreakerState(name, int(to))
+		},
 	})
 
 	return &gobreakerBreaker{cb: cb}
@@ -71,11 +76,21 @@ func IsCircuitOpen(err error) bool {
 }
 
 func (b *gobreakerBreaker) Do(run func() error, fallback func(error) error) error {
+	name := b.cb.Name()
 	_, err := b.cb.Execute(func() (interface{}, error) {
 		return nil, run()
 	})
-	if err != nil && fallback != nil {
-		return fallback(err)
+	if err != nil {
+		if IsCircuitOpen(err) {
+			metrics.ObserveCircuitBreakerCall(name, "rejected")
+		} else {
+			metrics.ObserveCircuitBreakerCall(name, "failure")
+		}
+		if fallback != nil {
+			return fallback(err)
+		}
+		return err
 	}
-	return err
+	metrics.ObserveCircuitBreakerCall(name, "success")
+	return nil
 }

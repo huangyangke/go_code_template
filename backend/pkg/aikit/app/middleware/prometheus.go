@@ -16,9 +16,8 @@ func Prometheus() gin.HandlerFunc {
 		status := c.Writer.Status()
 		path := c.FullPath()
 		if path == "" {
-			path = c.Request.URL.Path
+			path = "unmatched"
 		}
-		family := metrics.ServiceFamily()
-		metrics.ObserveHTTPRequest(family, c.Request.Method, path, status, time.Since(start))
+		metrics.ObserveHTTPRequest(c.Request.Method, path, status, time.Since(start))
 	}
 }

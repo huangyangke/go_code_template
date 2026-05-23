@@ -35,6 +35,8 @@
 │   │   ├── service/        # 业务逻辑层
 │   │   ├── dao/            # 数据访问层（SQL 操作）
 │   │   ├── model/          # 数据库模型（GORM 结构体）
+│   │   │   └── constants/  # Redis Key 模板
+│   │   ├── bcode/          # 业务错误码（BizError）
 │   │   └── schema/         # 请求/响应结构体（DTO）
 │   ├── pkg/
 │   │   └── aikit/          # 内置 aikit 工具包（不要直接修改，除非需要定制基础设施）
@@ -76,9 +78,37 @@
 | 层级 | 职责 | 依赖方向 |
 |------|------|----------|
 | Handler | HTTP 路由、参数解析、响应格式化 | → Service |
-| Service | 业务逻辑、事务控制 | → DAO |
+| Service | 业务逻辑、事务控制、bcode 错误转换 | → DAO |
 | DAO | SQL 操作 (CRUD) | → Model |
 | Model | 表结构、ORM 映射 | 无 |
+
+## 业务错误码（bcode）
+
+业务错误定义在 `backend/internal/bcode/bcode.go`，每个错误携带 HTTP 状态码、业务码、消息：
+
+```go
+// 定义（按领域分组）
+var ErrArticleNotFound = bcode.New(http.StatusNotFound, 10100, "文章不存在")
+
+// Service 层：将 gorm.ErrRecordNotFound 转为 bcode
+if errors.Is(err, gorm.ErrRecordNotFound) {
+    return nil, bcode.ErrArticleNotFound
+}
+
+// Handler 层：response.JSONErr 自动识别 bcode.BizError，无需额外处理
+response.JSONErr(c, nil, err)
+```
+
+命名规范：`Err{Domain}{Reason}`，如 `ErrUserNotFound`、`ErrOrderExpired`。
+
+业务码数字前缀按领域分段（示例）：
+
+| 领域 | 前缀 | 备注 |
+|------|------|------|
+| 框架保留（response 包） | 10000–10099 | 禁止在 bcode 中使用 |
+| Article | 10100–10199 | |
+| User | 10200–10299 | |
+| Order | 10300–10399 | |
 
 ## 命令
 
@@ -119,6 +149,9 @@
 - 新增路由在 `backend/internal/api/router.go` 的 `RegisterRoutes` 函数中注册
 - 配置通过 `pkg/aikit/config` 加载，支持 YAML + 环境变量 + 热重载
 - `pkg/aikit/` 是内置工具包；若需定制基础设施直接改它即可（无外部依赖）
+- 业务错误在 `internal/bcode/` 定义，Service 层负责将 DAO 错误（如 `gorm.ErrRecordNotFound`）转换为 bcode；Handler 层统一用 `response.JSONErr` 处理
+- Redis Key 模板定义在 `internal/model/constants/redis_key.go`，用 `NewKey(tmpl, ttl)` 定义，key 模板和 TTL 绑定在一起；调用方用 `key.Format(args...)` 生成 key，`key.TTL` 取过期时间
+- 分页默认值（page=1、page_size=20、max=100）直接写死在 DAO/Handler 调用处，不抽常量
 - 开发步骤：**小功能完整闭环迭代**，测试驱动开发 → 完整功能实现 → review → 提交 → 重启服务 → 人工 check → 再做下一个功能
 - 新增表结构变更时，在 `backend/cmd/migrate/migrations/` 下创建迁移文件（格式：`{序号}_{描述}.up.sql` / `.down.sql`），然后执行 `./run.sh migrate`
 - 每一次我的指令你觉得模棱两可，向我提问，明确需求再行动

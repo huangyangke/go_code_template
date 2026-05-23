@@ -41,17 +41,24 @@ func TestConfig_Fix_NoOverride(t *testing.T) {
 }
 
 func TestConfig_Validate_MissingDSN(t *testing.T) {
-	c := &Config{}
+	c := &Config{Name: "test-db"}
 	err := c.Validate()
 	if err == nil {
 		t.Fatal("expected error for empty DSN")
 	}
 }
 
-func TestConfig_Validate_Valid(t *testing.T) {
+func TestConfig_Validate_MissingName(t *testing.T) {
 	c := &Config{DSN: "user:pass@tcp(127.0.0.1:3306)/db"}
 	err := c.Validate()
-	if err != nil {
+	if err == nil {
+		t.Fatal("expected error for empty Name")
+	}
+}
+
+func TestConfig_Validate_Valid(t *testing.T) {
+	c := &Config{Name: "test-db", DSN: "user:pass@tcp(127.0.0.1:3306)/db"}
+	if err := c.Validate(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

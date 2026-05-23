@@ -2,8 +2,8 @@ package mysql
 
 import (
 	"errors"
-	"strings"
 
+	gomysql "github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 
 	"github.com/example/go-template/pkg/aikit/resilience"
@@ -100,9 +100,9 @@ func sqlAcceptable(err error) bool {
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return true
 	}
-	// MySQL duplicate entry error: Error 1062
-	if strings.Contains(err.Error(), "1062") && strings.Contains(err.Error(), "Duplicate entry") {
-		return true
+	var myErr *gomysql.MySQLError
+	if errors.As(err, &myErr) {
+		return myErr.Number == 1062
 	}
 	return false
 }

@@ -35,60 +35,26 @@ func TestJSON_Basic(t *testing.T) {
 	assert.Equal(t, "test-task-123", resp.TaskID)
 }
 
-func TestJSON_WithStatusCode(t *testing.T) {
+func TestJSON_CustomMsg(t *testing.T) {
 	c, w := setupTestContext()
 
-	JSON(c, nil, "", WithStatusCode())
+	JSON(c, nil, "", "取消信号已发送")
 
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "200", w.Header().Get("X-Status-Code"))
+	var resp ApiResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "取消信号已发送", resp.Msg)
 }
 
 func TestJSON_TaskIDFallback(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	// No task_id set in context → should fallback to "-"
 
 	JSON(c, nil, "custom-id")
 
 	var resp ApiResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "custom-id", resp.TaskID)
-}
-
-func TestFail_Basic(t *testing.T) {
-	c, w := setupTestContext()
-
-	Fail(c, http.StatusBadRequest, CodeBadRequest, "bad input")
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-
-	var resp ApiResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, CodeBadRequest, resp.Code)
-	assert.Equal(t, "bad input", resp.Msg)
-}
-
-func TestFail_WithStatusCode(t *testing.T) {
-	c, w := setupTestContext()
-
-	Fail(c, http.StatusBadRequest, CodeBadRequest, "bad input", WithStatusCode())
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Equal(t, "10000", w.Header().Get("X-Status-Code"))
-}
-
-func TestFail_WithConvertCode(t *testing.T) {
-	c, w := setupTestContext()
-
-	convertFn := func(code int) int {
-		return http.StatusServiceUnavailable // override any status
-	}
-
-	Fail(c, http.StatusBadRequest, CodeBadRequest, "bad input", WithConvertCode(convertFn))
-
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
 
 func TestJSONErr_Nil(t *testing.T) {
@@ -104,6 +70,20 @@ func TestJSONErr_Nil(t *testing.T) {
 	assert.Equal(t, "ok", resp.Data.(map[string]interface{})["result"])
 }
 
+func TestJSONErr_BizError(t *testing.T) {
+	c, w := setupTestContext()
+
+	err := &frameworkError{http.StatusBadRequest, CodeBadRequest, "请求错误"}
+	JSONErr(c, nil, err)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	var resp ApiResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, CodeBadRequest, resp.Code)
+	assert.Equal(t, "请求错误", resp.Msg)
+}
+
 func TestJSONErr_GeneralError(t *testing.T) {
 	c, w := setupTestContext()
 
@@ -114,7 +94,7 @@ func TestJSONErr_GeneralError(t *testing.T) {
 	var resp ApiResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, CodeInternalError, resp.Code)
-	assert.Equal(t, "something went wrong", resp.Msg)
+	assert.Equal(t, "服务器内部错误", resp.Msg)
 }
 
 func TestJSONErr_RecordNotFound(t *testing.T) {
@@ -127,13 +107,5 @@ func TestJSONErr_RecordNotFound(t *testing.T) {
 	var resp ApiResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, CodeNotFound, resp.Code)
-	assert.Equal(t, "record not found", resp.Msg)
-}
-
-func TestJSONErr_WithStatusCode(t *testing.T) {
-	c, w := setupTestContext()
-
-	JSONErr(c, nil, errors.New("fail"), WithStatusCode())
-
-	assert.Equal(t, "10005", w.Header().Get("X-Status-Code"))
+	assert.Equal(t, "记录不存在", resp.Msg)
 }

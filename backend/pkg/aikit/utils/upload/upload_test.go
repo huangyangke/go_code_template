@@ -57,6 +57,11 @@ func TestDetectExt_BMP(t *testing.T) {
 	assert.Equal(t, "bmp", DetectExt(data))
 }
 
+func TestDetectExt_BMPShortHeader(t *testing.T) {
+	data := []byte("BM")
+	assert.Equal(t, "bmp", DetectExt(data))
+}
+
 func TestDetectExt_WAV(t *testing.T) {
 	data := []byte("RIFF\x00\x00\x00\x00WAVEmore")
 	assert.Equal(t, "wav", DetectExt(data))
@@ -78,7 +83,7 @@ func TestDetectExt_MP3_SyncByte(t *testing.T) {
 }
 
 func TestDetectExt_Unknown(t *testing.T) {
-	data := []byte("random-unknown-data")
+	data := []byte{0x00, 0x01, 0x02, 0x03, 0xfe, 0xff}
 	assert.Equal(t, "unknown", DetectExt(data))
 }
 
@@ -86,6 +91,16 @@ func TestDetectExt_TooShort(t *testing.T) {
 	assert.Equal(t, "unknown", DetectExt([]byte{0x89}))
 	assert.Equal(t, "unknown", DetectExt([]byte{}))
 	assert.Equal(t, "unknown", DetectExt([]byte{0x89, 0x50}))
+}
+
+func TestDetectExt_JSON(t *testing.T) {
+	data := []byte("{\"name\":\"alice\"}")
+	assert.Equal(t, "json", DetectExt(data))
+}
+
+func TestDetectExt_TXT(t *testing.T) {
+	data := []byte("plain text content")
+	assert.Equal(t, "txt", DetectExt(data))
 }
 
 func TestExtOf_WithFileName(t *testing.T) {

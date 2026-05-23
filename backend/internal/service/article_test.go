@@ -6,7 +6,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"gorm.io/gorm"
 
+	apperrors "github.com/example/go-template/internal/errors"
 	"github.com/example/go-template/internal/model"
 	"github.com/example/go-template/internal/schema"
 	"github.com/example/go-template/internal/service"
@@ -60,5 +62,28 @@ func TestArticleService_Create(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "Hello", article.Title)
+	repo.AssertExpectations(t)
+}
+
+func TestArticleService_Get_NotFound(t *testing.T) {
+	repo := &mockRepo{}
+	repo.On("GetByID", mock.Anything, uint(99)).Return((*model.Article)(nil), gorm.ErrRecordNotFound)
+
+	svc := service.NewArticleService(repo)
+	result, err := svc.Get(context.Background(), 99)
+
+	assert.Nil(t, result)
+	assert.Equal(t, apperrors.ErrArticleNotFound, err)
+	repo.AssertExpectations(t)
+}
+
+func TestArticleService_Delete_NotFound(t *testing.T) {
+	repo := &mockRepo{}
+	repo.On("Delete", mock.Anything, uint(99)).Return(gorm.ErrRecordNotFound)
+
+	svc := service.NewArticleService(repo)
+	err := svc.Delete(context.Background(), 99)
+
+	assert.Equal(t, apperrors.ErrArticleNotFound, err)
 	repo.AssertExpectations(t)
 }

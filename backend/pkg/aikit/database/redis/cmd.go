@@ -26,6 +26,20 @@ func (r *Redis) GetNoNil(ctx context.Context, key string) (string, error) {
 	return val, err
 }
 
+func (r *Redis) MGet(ctx context.Context, keys ...string) ([]string, error) {
+	vals, err := r.client.MGet(ctx, r.keys(keys...)...).Result()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, len(vals))
+	for i, v := range vals {
+		if s, ok := v.(string); ok {
+			result[i] = s
+		}
+	}
+	return result, nil
+}
+
 func (r *Redis) Del(ctx context.Context, key string) (int, error) {
 	v, err := r.client.Del(ctx, r.key(key)).Result()
 	return int(v), err
@@ -74,6 +88,16 @@ func (r *Redis) Publish(ctx context.Context, channel string, message any) (int, 
 	return int(v), err
 }
 
+func (r *Redis) Subscribe(ctx context.Context, channels ...string) *redis.PubSub {
+	switch c := r.client.(type) {
+	case *redis.Client:
+		return c.Subscribe(ctx, r.keys(channels...)...)
+	case *redis.ClusterClient:
+		return c.Subscribe(ctx, r.keys(channels...)...)
+	}
+	panic("redis: Subscribe called on unsupported client type")
+}
+
 func (r *Redis) Pipeline() Pipeliner {
 	return r.client.Pipeline()
 }
@@ -91,39 +115,3 @@ func (r *Redis) Ping(ctx context.Context) bool {
 	return err == nil && v == "PONG"
 }
 
-// PubSub represents a Redis PubSub connection
-type PubSub struct {
-	pubsub *redis.PubSub
-}
-
-// NewPubSub creates a new PubSub instance
-func NewPubSub(client redis.Cmdable, channel string) *PubSub {
-	switch c := client.(type) {
-	case *redis.Client:
-		return &PubSub{
-			pubsub: c.Subscribe(context.Background(), channel),
-		}
-	case *redis.ClusterClient:
-		return &PubSub{
-			pubsub: c.Subscribe(context.Background(), channel),
-		}
-	default:
-		return nil
-	}
-}
-
-// Close closes the PubSub connection
-func (ps *PubSub) Close() error {
-	if ps.pubsub == nil {
-		return nil
-	}
-	return ps.pubsub.Close()
-}
-
-// Channel returns the subscription channel
-func (ps *PubSub) Channel() <-chan *redis.Message {
-	if ps.pubsub == nil {
-		return nil
-	}
-	return ps.pubsub.Channel()
-}

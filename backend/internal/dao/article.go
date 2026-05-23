@@ -52,5 +52,12 @@ func (d *ArticleDAO) Update(ctx context.Context, id uint, updates map[string]int
 }
 
 func (d *ArticleDAO) Delete(ctx context.Context, id uint) error {
-	return d.db.WithContext(ctx).Delete(&model.Article{}, id).Error
+	result := d.db.WithContext(ctx).Delete(&model.Article{}, id)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }

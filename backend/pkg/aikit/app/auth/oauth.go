@@ -135,7 +135,7 @@ func (m *Manager) handleOAuthAuthorize(name string, p OAuthProviderConfig) gin.H
 
 		resolved, err := m.resolveProvider(name, p)
 		if err != nil {
-			response.InternalError(c, err.Error())
+			response.InternalError(c)
 			return
 		}
 
@@ -158,7 +158,7 @@ func (m *Manager) handleOAuthAuthorize(name string, p OAuthProviderConfig) gin.H
 
 		state, err := m.buildState(name)
 		if err != nil {
-			response.InternalError(c, "failed to build state")
+			response.InternalError(c)
 			return
 		}
 
@@ -177,25 +177,25 @@ func (m *Manager) handleOAuthAuthorize(name string, p OAuthProviderConfig) gin.H
 func (m *Manager) handleOAuthCallback(name string, p OAuthProviderConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if errParam := c.Query("error"); errParam != "" {
-			response.BadRequest(c, fmt.Sprintf("OAuth error: %s", errParam))
+			response.BadRequest(c)
 			return
 		}
 
 		code := c.Query("code")
 		state := c.Query("state")
 		if code == "" || state == "" {
-			response.BadRequest(c, "missing code or state")
+			response.BadRequest(c)
 			return
 		}
 
 		if err := m.verifyState(state, name); err != nil {
-			response.BadRequest(c, err.Error())
+			response.BadRequest(c)
 			return
 		}
 
 		resolved, err := m.resolveProvider(name, p)
 		if err != nil {
-			response.InternalError(c, err.Error())
+			response.InternalError(c)
 			return
 		}
 
@@ -218,7 +218,7 @@ func (m *Manager) handleOAuthCallback(name string, p OAuthProviderConfig) gin.Ha
 
 		oauthToken, err := oauthCfg.Exchange(c.Request.Context(), code)
 		if err != nil {
-			response.BadRequest(c, "code exchange failed")
+			response.BadRequest(c)
 			return
 		}
 
@@ -226,23 +226,23 @@ func (m *Manager) handleOAuthCallback(name string, p OAuthProviderConfig) gin.Ha
 
 		identity, err := m.fetchOAuthIdentity(httpClient, name, resolved)
 		if err != nil {
-			response.InternalError(c, "failed to fetch user identity")
+			response.InternalError(c)
 			return
 		}
 
 		authResult, err := m.cfg.OAuthAuthenticate(c.Request.Context(), identity)
 		if err != nil {
-			response.InternalError(c, "OAuth authentication failed")
+			response.InternalError(c)
 			return
 		}
 		if authResult == nil {
-			response.Unauthorized(c, "OAuth authentication rejected")
+			response.Unauthorized(c)
 			return
 		}
 
 		bundle, err := m.issueTokenBundle(authResult, true)
 		if err != nil {
-			response.InternalError(c, "failed to issue token")
+			response.InternalError(c)
 			return
 		}
 		if m.cfg.SetCookies {

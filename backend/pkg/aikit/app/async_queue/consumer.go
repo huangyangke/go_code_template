@@ -359,7 +359,7 @@ func (c *Consumer) handleTask(ctx context.Context, msgID string, data map[string
 		if err := c.ackAndDel(ctx, msgID); err != nil {
 			log.Error("[Consumer][%s][ack_and_del_error][task_id=%s][msg_id=%s]: %v", endpoint, taskID, msgID, err)
 		}
-		metrics.GetAsyncQueueConsumeCounter().Inc(c.namespace, endpoint, "cancelled")
+		metrics.ObserveAsyncQueueConsume(endpoint, "cancelled", 0*time.Second)
 		log.Info("[Consumer][%s][cancelled_before_run][task_id=%s][msg_id=%s]", endpoint, taskID, msgID)
 		return
 	}
@@ -376,7 +376,7 @@ func (c *Consumer) handleTask(ctx context.Context, msgID string, data map[string
 		if err := c.ackAndDel(ctx, msgID); err != nil {
 			log.Error("[Consumer][%s][ack_and_del_error][task_id=%s][msg_id=%s]: %v", endpoint, taskID, msgID, err)
 		}
-		metrics.GetAsyncQueueConsumeCounter().Inc(c.namespace, endpoint, "failure")
+		metrics.ObserveAsyncQueueConsume(endpoint, "failure", 0*time.Second)
 		log.Error("[Consumer][%s][unknown_endpoint][task_id=%s][msg_id=%s]", endpoint, taskID, msgID)
 		return
 	}
@@ -418,7 +418,7 @@ func (c *Consumer) handleTask(ctx context.Context, msgID string, data map[string
 		if err := c.ackAndDel(ctx, msgID); err != nil {
 			log.Error("[Consumer][%s][ack_and_del_error][task_id=%s][msg_id=%s]: %v", endpoint, taskID, msgID, err)
 		}
-		metrics.GetAsyncQueueConsumeCounter().Inc(c.namespace, endpoint, "cancelled")
+		metrics.ObserveAsyncQueueConsume(endpoint, "cancelled", 0*time.Second)
 		log.Info("[Consumer][%s][cancelled_after_handler][task_id=%s][msg_id=%s]", endpoint, taskID, msgID)
 		return
 	}
@@ -461,8 +461,7 @@ func (c *Consumer) handleTask(ctx context.Context, msgID string, data map[string
 	}
 
 	// 记录任务消费指标
-	metrics.GetAsyncQueueConsumeCounter().Inc(c.namespace, endpoint, consumeResult)
-	metrics.GetAsyncQueueHandlerDuration().Observe(time.Since(startTime).Seconds(), c.namespace, endpoint, consumeResult)
+	metrics.ObserveAsyncQueueConsume(endpoint, consumeResult, time.Since(startTime))
 }
 
 // ================================

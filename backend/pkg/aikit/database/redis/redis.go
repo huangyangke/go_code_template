@@ -19,6 +19,7 @@ const (
 
 type (
 	Config struct {
+		Name             string        `yaml:"name"`
 		KeyPrefix        string        `yaml:"key_prefix"`
 		Addrs            []string      `yaml:"addrs"`
 		Type             string        `yaml:"type"` // cluster | sentinel | standalone
@@ -72,6 +73,7 @@ func New(c *Config, opts ...Option) *Redis {
 		opt(c)
 	}
 	c.fix()
+	c.hooks = append([]redis.Hook{NewPrometheusHook(c.Name)}, c.hooks...)
 	log.Info("[Redis][connect_start][type=%s][addrs=%v][db=%d]", c.Type, c.Addrs, c.DB)
 
 	if c.logger != nil {
@@ -166,6 +168,7 @@ func (c *Config) newStandaloneClient() *redis.Client {
 	return cl
 }
 
+
 // Fix fills default values for zero/empty fields
 func (c *Config) Fix() {
 	if c.Type == "" {
@@ -199,6 +202,9 @@ func (c *Config) Fix() {
 
 // Validate checks required fields and returns an error if any are missing
 func (c *Config) Validate() error {
+	if c.Name == "" {
+		return fmt.Errorf("redis: Name is required (used as Prometheus datasource label)")
+	}
 	if len(c.Addrs) < 1 {
 		return fmt.Errorf("redis: no addresses in config")
 	}

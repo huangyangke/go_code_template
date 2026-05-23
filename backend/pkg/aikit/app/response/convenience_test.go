@@ -20,17 +20,17 @@ func testContext() (*gin.Context, *httptest.ResponseRecorder) {
 
 func TestBadRequest(t *testing.T) {
 	c, w := testContext()
-	BadRequest(c, "invalid input")
+	BadRequest(c)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	var resp ApiResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, CodeBadRequest, resp.Code)
-	assert.Equal(t, "invalid input", resp.Msg)
+	assert.Equal(t, "请求错误", resp.Msg)
 }
 
 func TestParamError(t *testing.T) {
 	c, w := testContext()
-	ParamError(c, "missing field")
+	ParamError(c)
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 	var resp ApiResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -39,7 +39,7 @@ func TestParamError(t *testing.T) {
 
 func TestMethodNotAllowed(t *testing.T) {
 	c, w := testContext()
-	MethodNotAllowed(c, "use POST")
+	MethodNotAllowed(c)
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 	var resp ApiResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -48,7 +48,7 @@ func TestMethodNotAllowed(t *testing.T) {
 
 func TestNotFound(t *testing.T) {
 	c, w := testContext()
-	NotFound(c, "resource not found")
+	NotFound(c)
 	assert.Equal(t, http.StatusNotFound, w.Code)
 	var resp ApiResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -57,7 +57,7 @@ func TestNotFound(t *testing.T) {
 
 func TestUserNotFound(t *testing.T) {
 	c, w := testContext()
-	UserNotFound(c, "user does not exist")
+	UserNotFound(c)
 	assert.Equal(t, http.StatusNotFound, w.Code)
 	var resp ApiResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -66,7 +66,7 @@ func TestUserNotFound(t *testing.T) {
 
 func TestInternalError(t *testing.T) {
 	c, w := testContext()
-	InternalError(c, "something broke")
+	InternalError(c)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	var resp ApiResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -75,7 +75,7 @@ func TestInternalError(t *testing.T) {
 
 func TestUnauthorized(t *testing.T) {
 	c, w := testContext()
-	Unauthorized(c, "login required")
+	Unauthorized(c)
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	var resp ApiResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -84,7 +84,7 @@ func TestUnauthorized(t *testing.T) {
 
 func TestForbidden(t *testing.T) {
 	c, w := testContext()
-	Forbidden(c, "no permission")
+	Forbidden(c)
 	assert.Equal(t, http.StatusForbidden, w.Code)
 	var resp ApiResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -102,7 +102,7 @@ func TestRateLimited(t *testing.T) {
 
 func TestConflict(t *testing.T) {
 	c, w := testContext()
-	Conflict(c, "already exists")
+	Conflict(c)
 	assert.Equal(t, http.StatusConflict, w.Code)
 	var resp ApiResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))

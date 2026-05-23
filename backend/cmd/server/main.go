@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/example/go-template/pkg/aikit/app"
+	"github.com/example/go-template/pkg/aikit/app/middleware"
 	"github.com/example/go-template/pkg/aikit/config"
 	dbmysql "github.com/example/go-template/pkg/aikit/database/mysql"
 	dbredis "github.com/example/go-template/pkg/aikit/database/redis"
@@ -32,6 +34,14 @@ func main() {
 		Family: loader.GetString("app.family", "go-template"),
 		Stdout: env != "prod",
 		Dir:    loader.GetString("log.dir", "logs"),
+		WithFields: map[string]log.WithField{
+			"task_id": func(ctx context.Context) map[string]interface{} {
+				if id := middleware.GetTaskID(ctx); id != "" {
+					return map[string]interface{}{"task_id": id}
+				}
+				return nil
+			},
+		},
 	})
 
 	a := app.NewFastApp(app.FastAppConfig{

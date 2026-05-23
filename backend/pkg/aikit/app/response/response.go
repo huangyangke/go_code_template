@@ -3,7 +3,6 @@ package response
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -31,93 +30,67 @@ type ApiResponse struct {
 	TaskID string `json:"task_id"`
 }
 
-// ResponseOption configures response behavior
-type ResponseOption func(*responseConfig)
-
-type responseConfig struct {
-	statusCodeHeader bool
-	convertCode      func(code int) int
-}
-
-// WithStatusCode writes the business error code to the X-Status-Code response header
-func WithStatusCode() ResponseOption {
-	return func(c *responseConfig) {
-		c.statusCodeHeader = true
-	}
-}
-
-// WithConvertCode converts a business error code to an HTTP status code.
-// When set on Fail(), the returned HTTP status overrides the httpStatus parameter.
-func WithConvertCode(fn func(code int) int) ResponseOption {
-	return func(c *responseConfig) {
-		c.convertCode = fn
-	}
-}
-
-func applyOpts(opts ...ResponseOption) *responseConfig {
-	cfg := &responseConfig{}
-	for _, opt := range opts {
-		opt(cfg)
-	}
-	return cfg
-}
-
-func JSON(c *gin.Context, data any, taskID string, opts ...ResponseOption) {
-	cfg := applyOpts(opts...)
-
+func JSON(c *gin.Context, data any, taskID string, msg ...string) {
 	if taskID == "" {
 		taskID = getTaskID(c)
 	}
 
-	if cfg.statusCodeHeader {
-		c.Header("X-Status-Code", strconv.Itoa(CodeSuccess))
+	m := "success"
+	if len(msg) > 0 && msg[0] != "" {
+		m = msg[0]
 	}
 
 	c.JSON(http.StatusOK, ApiResponse{
 		Code:   CodeSuccess,
-		Msg:    "success",
+		Msg:    m,
 		Data:   data,
 		TaskID: taskID,
 	})
 }
 
-func Fail(c *gin.Context, httpStatus int, code int, msg string, opts ...ResponseOption) {
-	cfg := applyOpts(opts...)
-
-	if cfg.convertCode != nil {
-		httpStatus = cfg.convertCode(code)
-	}
-	if cfg.statusCodeHeader {
-		c.Header("X-Status-Code", strconv.Itoa(code))
-	}
-
-	c.JSON(httpStatus, ApiResponse{
-		Code:   code,
-		Msg:    msg,
-		Data:   []any{},
-		TaskID: getTaskID(c),
-	})
+// bizError is the interface that typed business errors must implement.
+type bizError interface {
+	error
+	BizCode() int
+	BizHTTPStatus() int
 }
 
-// JSONErr sends a response that automatically determines the business code from err.
-// If err is nil, returns 200 with success. If err is not nil, maps it to a business code.
-func JSONErr(c *gin.Context, data any, err error, opts ...ResponseOption) {
+// JSONErr sends a response determined by err.
+// If err is nil, returns 200 with success.
+// Priority: bizError → gorm.ErrRecordNotFound → generic 500.
+func JSONErr(c *gin.Context, data any, err error) {
 	if err == nil {
-		JSON(c, data, "", opts...)
+		JSON(c, data, "")
 		return
 	}
 
-	code := CodeInternalError
-	msg := err.Error()
-	httpStatus := http.StatusInternalServerError
-
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		code = CodeNotFound
-		msg = "record not found"
-		httpStatus = http.StatusNotFound
+	var biz bizError
+	if errors.As(err, &biz) {
+		c.JSON(biz.BizHTTPStatus(), ApiResponse{
+			Code:   biz.BizCode(),
+			Msg:    biz.Error(),
+			Data:   []any{},
+			TaskID: getTaskID(c),
+		})
+		return
 	}
 
-	Fail(c, httpStatus, code, msg, opts...)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, ApiResponse{
+			Code:   CodeNotFound,
+			Msg:    "记录不存在",
+			Data:   []any{},
+			TaskID: getTaskID(c),
+		})
+		return
+	}
+
+	c.JSON(http.StatusInternalServerError, ApiResponse{
+		Code:   CodeInternalError,
+		Msg:    "服务器内部错误",
+		Data:   []any{},
+		TaskID: getTaskID(c),
+	})
 }
 
 // getTaskID extracts task_id from gin context (set by RequestID middleware)
@@ -130,42 +103,37 @@ func getTaskID(c *gin.Context) string {
 	return "-"
 }
 
-func BadRequest(c *gin.Context, msg string) {
-	Fail(c, http.StatusBadRequest, CodeBadRequest, msg)
+// frameworkError is the package-private AppError type for framework-layer errors.
+type frameworkError struct {
+	httpStatus int
+	code       int
+	msg        string
 }
 
-func ParamError(c *gin.Context, msg string) {
-	Fail(c, http.StatusUnprocessableEntity, CodeParamError, msg)
-}
+func (e *frameworkError) Error() string      { return e.msg }
+func (e *frameworkError) BizCode() int       { return e.code }
+func (e *frameworkError) BizHTTPStatus() int { return e.httpStatus }
 
-func MethodNotAllowed(c *gin.Context, msg string) {
-	Fail(c, http.StatusMethodNotAllowed, CodeMethodDenied, msg)
-}
+var (
+	errBadRequest   = &frameworkError{http.StatusBadRequest, CodeBadRequest, "请求错误"}
+	errParamError   = &frameworkError{http.StatusUnprocessableEntity, CodeParamError, "参数校验错误"}
+	errMethodDenied = &frameworkError{http.StatusMethodNotAllowed, CodeMethodDenied, "请求方法错误"}
+	errNotFound     = &frameworkError{http.StatusNotFound, CodeNotFound, "请求路径错误"}
+	errUserNotFound = &frameworkError{http.StatusNotFound, CodeUserNotFound, "用户不存在"}
+	errInternal     = &frameworkError{http.StatusInternalServerError, CodeInternalError, "服务器内部错误"}
+	errUnauthorized = &frameworkError{http.StatusUnauthorized, CodeUnauthorized, "未登录或登录已失效"}
+	errForbidden    = &frameworkError{http.StatusForbidden, CodeForbidden, "无权限访问"}
+	errRateLimited  = &frameworkError{http.StatusTooManyRequests, CodeRateLimited, "请求过于频繁，请稍后重试"}
+	errConflict     = &frameworkError{http.StatusConflict, CodeConflict, "资源已存在"}
+)
 
-func NotFound(c *gin.Context, msg string) {
-	Fail(c, http.StatusNotFound, CodeNotFound, msg)
-}
-
-func UserNotFound(c *gin.Context, msg string) {
-	Fail(c, http.StatusNotFound, CodeUserNotFound, msg)
-}
-
-func InternalError(c *gin.Context, msg string) {
-	Fail(c, http.StatusInternalServerError, CodeInternalError, msg)
-}
-
-func Unauthorized(c *gin.Context, msg string) {
-	Fail(c, http.StatusUnauthorized, CodeUnauthorized, msg)
-}
-
-func Forbidden(c *gin.Context, msg string) {
-	Fail(c, http.StatusForbidden, CodeForbidden, msg)
-}
-
-func RateLimited(c *gin.Context) {
-	Fail(c, http.StatusTooManyRequests, CodeRateLimited, "请求过于频繁，请稍后重试")
-}
-
-func Conflict(c *gin.Context, msg string) {
-	Fail(c, http.StatusConflict, CodeConflict, msg)
-}
+func BadRequest(c *gin.Context)       { JSONErr(c, nil, errBadRequest) }
+func ParamError(c *gin.Context)       { JSONErr(c, nil, errParamError) }
+func MethodNotAllowed(c *gin.Context) { JSONErr(c, nil, errMethodDenied) }
+func NotFound(c *gin.Context)         { JSONErr(c, nil, errNotFound) }
+func UserNotFound(c *gin.Context)     { JSONErr(c, nil, errUserNotFound) }
+func InternalError(c *gin.Context)    { JSONErr(c, nil, errInternal) }
+func Unauthorized(c *gin.Context)     { JSONErr(c, nil, errUnauthorized) }
+func Forbidden(c *gin.Context)        { JSONErr(c, nil, errForbidden) }
+func RateLimited(c *gin.Context)      { JSONErr(c, nil, errRateLimited) }
+func Conflict(c *gin.Context)         { JSONErr(c, nil, errConflict) }

@@ -26,14 +26,14 @@ func TokenAuth(verify VerifyFunc, whitelist ...string) gin.HandlerFunc {
 		auth := c.GetHeader("Authorization")
 		token := strings.TrimPrefix(auth, "Bearer ")
 		if token == "" || token == auth {
-			response.Unauthorized(c, "missing or invalid authorization header")
+			response.Unauthorized(c)
 			c.Abort()
 			return
 		}
 
 		ok, err := verify(c.Request.Context(), token)
 		if err != nil || !ok {
-			response.Unauthorized(c, "unauthorized")
+			response.Unauthorized(c)
 			c.Abort()
 			return
 		}

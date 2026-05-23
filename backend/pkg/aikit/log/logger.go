@@ -160,6 +160,36 @@ func FatalCtx(ctx context.Context, format string, args ...interface{}) {
 	}
 }
 
+func Debugv(ctx context.Context, args ...D) {
+	if _debugLevel >= v {
+		h.Log(ctx, _debugLevel, args...)
+	}
+}
+
+func Infov(ctx context.Context, args ...D) {
+	if _infoLevel >= v {
+		h.Log(ctx, _infoLevel, args...)
+	}
+}
+
+func Warnv(ctx context.Context, args ...D) {
+	if _warnLevel >= v {
+		h.Log(ctx, _warnLevel, args...)
+	}
+}
+
+func Errorv(ctx context.Context, args ...D) {
+	if _errorLevel >= v {
+		h.Log(ctx, _errorLevel, args...)
+	}
+}
+
+func Fatalv(ctx context.Context, args ...D) {
+	if _fatalLevel >= v {
+		h.Log(ctx, _fatalLevel, args...)
+	}
+}
+
 func Close() error {
 	err := h.Close()
 	h = newHandlers(nil, _defaultStdout)

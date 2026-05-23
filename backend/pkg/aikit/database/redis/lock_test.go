@@ -16,6 +16,7 @@ func newTestRedis(t *testing.T) (*dbredis.Redis, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
 	r := dbredis.New(&dbredis.Config{
+		Name:  "test",
 		Type:  dbredis.StandaloneType,
 		Addrs: []string{mr.Addr()},
 	})

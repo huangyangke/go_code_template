@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -270,20 +269,20 @@ func (m *Manager) AuthRequired() gin.HandlerFunc {
 			tokenStr, _ = c.Cookie("access_token")
 		}
 		if tokenStr == "" {
-			response.Unauthorized(c, "missing access token")
+			response.Unauthorized(c)
 			c.Abort()
 			return
 		}
 
 		claims, err := m.parseToken(tokenStr)
 		if err != nil || claims.Type != tokenTypeAccess {
-			response.Unauthorized(c, "invalid access token")
+			response.Unauthorized(c)
 			c.Abort()
 			return
 		}
 
 		if err := m.checkRevocation(c.Request.Context(), claims, tokenStr); err != nil {
-			response.Unauthorized(c, err.Error())
+			response.Unauthorized(c)
 			c.Abort()
 			return
 		}
@@ -292,12 +291,12 @@ func (m *Manager) AuthRequired() gin.HandlerFunc {
 		if m.cfg.GetTokenVersion != nil && claims.Ver > 0 {
 			ver, err := m.cfg.GetTokenVersion(c.Request.Context(), claims.UID)
 			if err != nil {
-				response.Unauthorized(c, "token version check error")
+				response.Unauthorized(c)
 				c.Abort()
 				return
 			}
 			if ver != claims.Ver {
-				response.Unauthorized(c, "token version mismatch, please re-login")
+				response.Unauthorized(c)
 				c.Abort()
 				return
 			}
@@ -321,7 +320,7 @@ func (m *Manager) RequireScopes(required ...string) gin.HandlerFunc {
 		}
 		for _, req := range required {
 			if _, ok := scopeSet[req]; !ok {
-				response.Forbidden(c, fmt.Sprintf("missing required scope: %s", req))
+				response.Forbidden(c)
 				c.Abort()
 				return
 			}
@@ -341,23 +340,23 @@ func (m *Manager) handleLogin(c *gin.Context) {
 
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.ParamError(c, err.Error())
+		response.ParamError(c)
 		return
 	}
 
 	result, err := m.cfg.Authenticate(c.Request.Context(), req.Username, req.Password)
 	if err != nil {
-		response.InternalError(c, "authentication error")
+		response.InternalError(c)
 		return
 	}
 	if result == nil {
-		response.Unauthorized(c, m.cfg.InvalidCredentialsMsg)
+		response.Unauthorized(c)
 		return
 	}
 
 	bundle, err := m.issueTokenBundle(result, true)
 	if err != nil {
-		response.InternalError(c, "failed to issue token")
+		response.InternalError(c)
 		return
 	}
 	if m.cfg.SetCookies {
@@ -375,13 +374,13 @@ func (m *Manager) handleRegister(c *gin.Context) {
 
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.ParamError(c, err.Error())
+		response.ParamError(c)
 		return
 	}
 
 	if m.cfg.PasswordPolicy != nil {
 		if errs := m.cfg.PasswordPolicy.Validate(req.Password); len(errs) > 0 {
-			response.ParamError(c, strings.Join(errs, "; "))
+			response.ParamError(c)
 			return
 		}
 	}
@@ -389,17 +388,17 @@ func (m *Manager) handleRegister(c *gin.Context) {
 	result, err := m.cfg.RegisterUser(c.Request.Context(), req)
 	if err != nil {
 		if errors.Is(err, ErrUserAlreadyExists) {
-			response.Conflict(c, "用户已存在")
+			response.Conflict(c)
 			return
 		}
-		response.InternalError(c, "registration failed")
+		response.InternalError(c)
 		return
 	}
 
 	if m.cfg.AutoLoginAfterRegister {
 		bundle, err := m.issueTokenBundle(result, true)
 		if err != nil {
-			response.InternalError(c, "failed to issue token")
+			response.InternalError(c)
 			return
 		}
 		if m.cfg.SetCookies {
@@ -418,13 +417,13 @@ func (m *Manager) handleRefresh(c *gin.Context) {
 		tokenStr, _ = c.Cookie("refresh_token")
 	}
 	if tokenStr == "" {
-		response.Unauthorized(c, "missing refresh token")
+		response.Unauthorized(c)
 		return
 	}
 
 	claims, err := m.parseToken(tokenStr)
 	if err != nil || claims.Type != tokenTypeRefresh {
-		response.Unauthorized(c, "invalid refresh token")
+		response.Unauthorized(c)
 		return
 	}
 
@@ -433,7 +432,7 @@ func (m *Manager) handleRefresh(c *gin.Context) {
 		key := revocationKey(claims, tokenStr)
 		revoked, err := m.cfg.IsTokenRevoked(c.Request.Context(), key)
 		if err != nil {
-			response.InternalError(c, "token validation error")
+			response.InternalError(c)
 			return
 		}
 		if revoked {
@@ -443,7 +442,7 @@ func (m *Manager) handleRefresh(c *gin.Context) {
 			if m.cfg.OnTokenReuse != nil {
 				m.cfg.OnTokenReuse(c, claims.UID)
 			}
-			response.Unauthorized(c, "refresh token has been revoked")
+			response.Unauthorized(c)
 			return
 		}
 	}
@@ -452,11 +451,11 @@ func (m *Manager) handleRefresh(c *gin.Context) {
 	if m.cfg.GetTokenVersion != nil && claims.Ver > 0 {
 		ver, err := m.cfg.GetTokenVersion(c.Request.Context(), claims.UID)
 		if err != nil {
-			response.InternalError(c, "token version check error")
+			response.InternalError(c)
 			return
 		}
 		if ver != claims.Ver {
-			response.Unauthorized(c, "token version mismatch, please re-login")
+			response.Unauthorized(c)
 			return
 		}
 	}
@@ -475,7 +474,7 @@ func (m *Manager) handleRefresh(c *gin.Context) {
 	}
 	bundle, err := m.issueTokenBundle(result, false)
 	if err != nil {
-		response.InternalError(c, "failed to issue token")
+		response.InternalError(c)
 		return
 	}
 	if m.cfg.SetCookies {
@@ -491,7 +490,7 @@ func (m *Manager) handleLogout(c *gin.Context) {
 	}
 
 	if m.cfg.RequireTokenOnLogout && tokenStr == "" {
-		response.Unauthorized(c, "missing access token")
+		response.Unauthorized(c)
 		return
 	}
 
@@ -510,16 +509,16 @@ func (m *Manager) handleLogout(c *gin.Context) {
 func (m *Manager) handleMe(c *gin.Context) {
 	uid := GetUID(c)
 	if uid == "" {
-		response.Unauthorized(c, "not authenticated")
+		response.Unauthorized(c)
 		return
 	}
 	user, err := m.cfg.GetSubject(c.Request.Context(), uid)
 	if err != nil {
 		if errors.Is(err, ErrUserNotFound) {
-			response.UserNotFound(c, "user not found")
+			response.UserNotFound(c)
 			return
 		}
-		response.InternalError(c, "failed to fetch user")
+		response.InternalError(c)
 		return
 	}
 	response.JSON(c, user, "")

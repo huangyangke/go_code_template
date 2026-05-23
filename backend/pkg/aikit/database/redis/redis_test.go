@@ -33,10 +33,9 @@ func TestNew_SentinelNoMasterName_Panics(t *testing.T) {
 
 func TestConfig_fix_Defaults(t *testing.T) {
 	cfg := &Config{
+		Name:  "test",
 		Addrs: []string{"localhost:6379"},
 	}
-	// fix() panics if < 1 addr — provide addr
-	// Type should default to cluster
 	cfg.fix()
 	assert.Equal(t, ClusterType, cfg.Type)
 	assert.Equal(t, 16, cfg.PoolSize)

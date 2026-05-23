@@ -1,13 +1,16 @@
 package api
 
 import (
+	"errors"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/example/go-template/pkg/aikit/app/response"
 
+	apperrors "github.com/example/go-template/internal/errors"
 	"github.com/example/go-template/internal/schema"
 	"github.com/example/go-template/internal/service"
+	"github.com/example/go-template/pkg/aikit/app/response"
+	"github.com/example/go-template/pkg/aikit/log"
 )
 
 // ArticleHandler handles HTTP requests for articles.
@@ -39,14 +42,9 @@ func (h *ArticleHandler) List(c *gin.Context) {
 
 	articles, total, err := h.svc.List(c.Request.Context(), page, size)
 	if err != nil {
-		response.InternalError(c, err.Error())
-		return
+		log.Error("list articles: %v", err)
 	}
-
-	response.JSON(c, gin.H{
-		"total": total,
-		"list":  articles,
-	}, "")
+	response.JSONErr(c, gin.H{"total": total, "list": articles}, err)
 }
 
 // Create godoc
@@ -60,17 +58,15 @@ func (h *ArticleHandler) List(c *gin.Context) {
 func (h *ArticleHandler) Create(c *gin.Context) {
 	var req schema.CreateArticleReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.ParamError(c, err.Error())
+		response.ParamError(c)
 		return
 	}
 
 	article, err := h.svc.Create(c.Request.Context(), &req)
 	if err != nil {
-		response.InternalError(c, err.Error())
-		return
+		log.Error("create article: %v", err)
 	}
-
-	response.JSON(c, article, "")
+	response.JSONErr(c, article, err)
 }
 
 // Get godoc
@@ -83,17 +79,15 @@ func (h *ArticleHandler) Create(c *gin.Context) {
 func (h *ArticleHandler) Get(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		response.BadRequest(c, "invalid id")
+		response.BadRequest(c)
 		return
 	}
 
 	article, err := h.svc.Get(c.Request.Context(), uint(id))
-	if err != nil {
-		response.JSONErr(c, nil, err)
-		return
+	if err != nil && !errors.As(err, new(*apperrors.AppError)) {
+		log.Error("get article %d: %v", id, err)
 	}
-
-	response.JSON(c, article, "")
+	response.JSONErr(c, article, err)
 }
 
 // Update godoc
@@ -108,23 +102,21 @@ func (h *ArticleHandler) Get(c *gin.Context) {
 func (h *ArticleHandler) Update(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		response.BadRequest(c, "invalid id")
+		response.BadRequest(c)
 		return
 	}
 
 	var req schema.UpdateArticleReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.ParamError(c, err.Error())
+		response.ParamError(c)
 		return
 	}
 
 	article, err := h.svc.Update(c.Request.Context(), uint(id), &req)
-	if err != nil {
-		response.JSONErr(c, nil, err)
-		return
+	if err != nil && !errors.As(err, new(*apperrors.AppError)) {
+		log.Error("update article %d: %v", id, err)
 	}
-
-	response.JSON(c, article, "")
+	response.JSONErr(c, article, err)
 }
 
 // Delete godoc
@@ -137,14 +129,13 @@ func (h *ArticleHandler) Update(c *gin.Context) {
 func (h *ArticleHandler) Delete(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		response.BadRequest(c, "invalid id")
+		response.BadRequest(c)
 		return
 	}
 
-	if err := h.svc.Delete(c.Request.Context(), uint(id)); err != nil {
-		response.JSONErr(c, nil, err)
-		return
+	err = h.svc.Delete(c.Request.Context(), uint(id))
+	if err != nil && !errors.As(err, new(*apperrors.AppError)) {
+		log.Error("delete article %d: %v", id, err)
 	}
-
-	response.JSON(c, nil, "")
+	response.JSONErr(c, nil, err)
 }

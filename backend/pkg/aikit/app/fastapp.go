@@ -214,6 +214,9 @@ func (a *FastApp) GetXxlJob() *xjob.Executor {
 
 // RegisterRedis registers a named Redis instance
 func (a *FastApp) RegisterRedis(name string, cfg *dbredis.Config) *dbredis.Redis {
+	if cfg.Name == "" {
+		cfg.Name = a.cfg.Family + "/" + name
+	}
 	rdb := dbredis.New(cfg)
 	a.redisInstances[name] = rdb
 	return rdb
@@ -226,6 +229,9 @@ func (a *FastApp) GetRedis(name string) *dbredis.Redis {
 
 // RegisterMySQL registers a named MySQL instance
 func (a *FastApp) RegisterMySQL(name string, cfg *dbmysql.Config, opts ...dbmysql.Option) *dbmysql.Database {
+	if cfg.Name == "" {
+		cfg.Name = a.cfg.Family + "/" + name
+	}
 	db := dbmysql.New(cfg, opts...)
 	a.mysqlInstances[name] = db
 	return db
@@ -236,8 +242,21 @@ func (a *FastApp) GetMySQL(name string) *dbmysql.Database {
 	return a.mysqlInstances[name]
 }
 
-// RegisterCache registers a named Cache instance
+// RegisterCache registers a named Cache instance.
+// If a Redis instance with the same name was previously registered via RegisterRedis,
+// it is automatically reused as the remote cache backend.
 func (a *FastApp) RegisterCache(name string, cfg cache.Config) (*cache.MultiLevelCache, error) {
+	if cfg.Family == "" {
+		cfg.Family = a.cfg.Family
+	}
+	if cfg.Name == "" {
+		cfg.Name = name
+	}
+	if cfg.RedisCmdable == nil {
+		if rdb, ok := a.redisInstances[name]; ok {
+			cfg.RedisCmdable = rdb.Cmdable()
+		}
+	}
 	c, err := cache.New(cfg)
 	if err != nil {
 		return nil, err
@@ -297,7 +316,7 @@ func (a *FastApp) buildMiddlewareChain() {
 		whitelist := a.mwCfg.TokenWhitelist
 		whitelist = append(whitelist,
 			"/healthz",
-			"/metrics",
+			"/monitor/prometheus",
 			"/docs",
 			"/redoc",
 			"/openapi.json",
@@ -364,7 +383,7 @@ func (a *FastApp) healthCheckHandler() gin.HandlerFunc {
 // registerBuiltinEndpoints registers /healthz, /metrics, and optional debug endpoints
 func (a *FastApp) registerBuiltinEndpoints() {
 	a.engine.GET("/healthz", a.healthCheckHandler())
-	a.engine.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	a.engine.GET("/monitor/prometheus", gin.WrapH(promhttp.Handler()))
 
 	if a.mwCfg.EnablePprof {
 		pprof.RouteRegister(a.engine.Group("/debug"), "pprof")
@@ -429,10 +448,12 @@ func (a *FastApp) setupAsyncQueue() error {
 
 // Run starts the FastApp: sets up middleware, routes, and starts the HTTP server
 func (a *FastApp) Run() error {
-	// Sync family to metrics and log
-	metrics.SetFamily(a.cfg.Family)
 	if f := log.GetFamily(); f == "" || f == "dev" {
 		log.SetFamily(a.cfg.Family)
+	}
+
+	if a.mwCfg.EnablePrometheus {
+		metrics.Enable()
 	}
 
 	if a.authManager != nil && a.mwCfg.EnableTokenAuth {

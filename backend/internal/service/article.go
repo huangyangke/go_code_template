@@ -2,7 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 
+	"gorm.io/gorm"
+
+	apperrors "github.com/example/go-template/internal/errors"
 	"github.com/example/go-template/internal/model"
 	"github.com/example/go-template/internal/schema"
 )
@@ -40,7 +44,11 @@ func (s *ArticleService) Create(ctx context.Context, req *schema.CreateArticleRe
 }
 
 func (s *ArticleService) Get(ctx context.Context, id uint) (*model.Article, error) {
-	return s.repo.GetByID(ctx, id)
+	article, err := s.repo.GetByID(ctx, id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, apperrors.ErrArticleNotFound
+	}
+	return article, err
 }
 
 func (s *ArticleService) Update(ctx context.Context, id uint, req *schema.UpdateArticleReq) (*model.Article, error) {
@@ -52,11 +60,23 @@ func (s *ArticleService) Update(ctx context.Context, id uint, req *schema.Update
 		updates["content"] = req.Content
 	}
 	if len(updates) == 0 {
-		return s.repo.GetByID(ctx, id)
+		article, err := s.repo.GetByID(ctx, id)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apperrors.ErrArticleNotFound
+		}
+		return article, err
 	}
-	return s.repo.Update(ctx, id, updates)
+	article, err := s.repo.Update(ctx, id, updates)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, apperrors.ErrArticleNotFound
+	}
+	return article, err
 }
 
 func (s *ArticleService) Delete(ctx context.Context, id uint) error {
-	return s.repo.Delete(ctx, id)
+	err := s.repo.Delete(ctx, id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return apperrors.ErrArticleNotFound
+	}
+	return err
 }
