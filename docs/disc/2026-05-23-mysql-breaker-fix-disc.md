@@ -107,7 +107,7 @@ func (b *gobreakerBreaker) Do(run func() error, fallback func(error) error) erro
 }
 ```
 
-`ErrCircuitOpen`、`IsCircuitOpen` 不变。metrics 上报点从原来分散在 `Do` 内部，统一收敛到 `Allow` 返回值和 `done` 闭包里 —— 两条路径口径完全一致。
+`ErrCircuitOpen`、`IsCircuitOpen` 不变。`IsCircuitOpen` 已经覆盖 `ErrOpenState` 和 `ErrTooManyRequests`（`breaker.go:74-76`），所以 half-open 名额耗尽返回 `ErrTooManyRequests` 时也会被计入 `rejected` 指标，不会在 metrics 上沉默。metrics 上报点从原来分散在 `Do` 内部，统一收敛到 `Allow` 返回值和 `done` 闭包里 —— 两条路径口径完全一致。
 
 ### `mysql.BreakerPlugin` 改造
 
