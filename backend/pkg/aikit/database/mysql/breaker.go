@@ -9,6 +9,8 @@ import (
 	"github.com/example/go-template/pkg/aikit/resilience"
 )
 
+const breakerCtxKey = "aikit_sql_breaker_done"
+
 // BreakerPlugin implements gorm.Plugin to add circuit breaker protection to SQL queries.
 // ErrRecordNotFound and duplicate entry errors are considered acceptable (not counted as failures).
 type BreakerPlugin struct {
@@ -62,33 +64,27 @@ func (p *BreakerPlugin) Initialize(db *gorm.DB) error {
 }
 
 func (p *BreakerPlugin) beforeCallback(db *gorm.DB) {
-	_ = db.InstanceSet("aikit_sql_breaker_active", true)
+	if db.Error != nil {
+		return
+	}
+	done, err := p.breaker.Allow()
+	if err != nil {
+		_ = db.AddError(err)
+		return
+	}
+	_ = db.InstanceSet(breakerCtxKey, done)
 }
 
 func (p *BreakerPlugin) afterCallback(db *gorm.DB) {
-	active, _ := db.InstanceGet("aikit_sql_breaker_active")
-	if active == nil {
+	raw, ok := db.InstanceGet(breakerCtxKey)
+	if !ok {
 		return
 	}
-	_ = db.InstanceSet("aikit_sql_breaker_active", nil)
-
-	acceptable := sqlAcceptable(db.Error)
-	// Use breaker.Do with a fallback that swallows acceptable errors
-	// so they don't count as failures.
-	err := p.breaker.Do(func() error {
-		if db.Error != nil && !acceptable {
-			return db.Error
-		}
-		return nil
-	}, func(err error) error {
-		if acceptable {
-			return nil
-		}
-		return err
-	})
-	if err != nil {
-		db.Error = err
+	done, ok := raw.(func(success bool))
+	if !ok {
+		return
 	}
+	done(sqlAcceptable(db.Error))
 }
 
 // sqlAcceptable returns true for errors that should NOT count toward circuit
