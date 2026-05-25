@@ -24,6 +24,7 @@ import (
 	"github.com/example/go-template/pkg/aikit/cache"
 	"github.com/example/go-template/pkg/aikit/config"
 	dbmysql "github.com/example/go-template/pkg/aikit/database/mysql"
+	dbpulsar "github.com/example/go-template/pkg/aikit/database/pulsar"
 	dbredis "github.com/example/go-template/pkg/aikit/database/redis"
 	"github.com/example/go-template/pkg/aikit/app/xjob"
 	"github.com/example/go-template/pkg/aikit/log"
@@ -112,6 +113,7 @@ type FastApp struct {
 	mysqlInstances    map[string]*dbmysql.Database
 	cacheInstances    map[string]*cache.MultiLevelCache
 	httpClientInstances map[string]*httpclient.Client
+	pulsarInstances   map[string]*dbpulsar.Client
 
 	// xxl-job
 	xjobConfig   *XxlJobConfig
@@ -147,6 +149,7 @@ func NewFastApp(cfg FastAppConfig) *FastApp {
 		mysqlInstances:     make(map[string]*dbmysql.Database),
 		cacheInstances:     make(map[string]*cache.MultiLevelCache),
 		httpClientInstances: make(map[string]*httpclient.Client),
+		pulsarInstances:    make(map[string]*dbpulsar.Client),
 	}
 }
 
@@ -280,6 +283,21 @@ func (a *FastApp) RegisterHTTPClient(name string, cfg httpclient.Config, opts ..
 // GetHTTPClient returns a named HTTP client instance
 func (a *FastApp) GetHTTPClient(name string) *httpclient.Client {
 	return a.httpClientInstances[name]
+}
+
+// RegisterPulsar registers a named Pulsar client instance.
+func (a *FastApp) RegisterPulsar(name string, cfg *dbpulsar.Config) *dbpulsar.Client {
+	if cfg.Name == "" {
+		cfg.Name = a.cfg.Family + "/" + name
+	}
+	client := dbpulsar.New(cfg)
+	a.pulsarInstances[name] = client
+	return client
+}
+
+// GetPulsar returns a named Pulsar client instance.
+func (a *FastApp) GetPulsar(name string) *dbpulsar.Client {
+	return a.pulsarInstances[name]
 }
 
 // ConfigLoader returns the config loader
@@ -601,6 +619,12 @@ func (a *FastApp) shutdown() error {
 			_ = sqlDB.Close()
 		}
 		log.Info("mysql [%s] closed", name)
+	}
+
+	// Close Pulsar instances
+	for name, client := range a.pulsarInstances {
+		client.Close()
+		log.Info("pulsar [%s] closed", name)
 	}
 
 	// Close Redis instances

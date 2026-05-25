@@ -152,3 +152,9 @@ func TestFastApp_SwaggerDisabled(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
+
+func TestFastApp_Pulsar_NotRegistered(t *testing.T) {
+	fa := NewFastApp(FastAppConfig{Family: "test"})
+	// GetPulsar returns nil before registration
+	assert.Nil(t, fa.GetPulsar("demo"))
+}
