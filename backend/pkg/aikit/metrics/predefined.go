@@ -149,28 +149,43 @@ func GetHTTPClientRequestDuration() HistogramVec { return httpClientRequestDurat
 // ================================
 
 var (
-	redisRequestsTotal   CounterVec
-	redisRequestDuration HistogramVec
+	redisRequestsTotal           CounterVec
+	redisRequestDuration         HistogramVec
+	redisPipelineRequestsTotal   CounterVec
+	redisPipelineRequestDuration HistogramVec
 )
 
 func init() {
 	Register(func() {
 		redisRequestsTotal = NewCounterVec(&CounterVecOpts{
 			Name:   "redis_requests_total",
-			Help:   "Total Redis requests",
+			Help:   "Total Redis requests (single command)",
 			Labels: []string{"datasource", "success"},
 		})
 		redisRequestDuration = NewHistogramVec(&HistogramVecOpts{
 			Name:    "redis_request_duration_seconds",
-			Help:    "Redis request latency in seconds",
+			Help:    "Redis request latency in seconds (single command)",
+			Labels:  []string{"datasource"},
+			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0},
+		})
+		redisPipelineRequestsTotal = NewCounterVec(&CounterVecOpts{
+			Name:   "redis_pipeline_requests_total",
+			Help:   "Total Redis pipeline executions (one batch = one observation)",
+			Labels: []string{"datasource", "success"},
+		})
+		redisPipelineRequestDuration = NewHistogramVec(&HistogramVecOpts{
+			Name:    "redis_pipeline_duration_seconds",
+			Help:    "Redis pipeline batch latency in seconds",
 			Labels:  []string{"datasource"},
 			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0},
 		})
 	})
 }
 
-func GetRedisRequestCounter() CounterVec   { return redisRequestsTotal }
-func GetRedisRequestDuration() HistogramVec { return redisRequestDuration }
+func GetRedisRequestCounter() CounterVec           { return redisRequestsTotal }
+func GetRedisRequestDuration() HistogramVec        { return redisRequestDuration }
+func GetRedisPipelineRequestCounter() CounterVec   { return redisPipelineRequestsTotal }
+func GetRedisPipelineRequestDuration() HistogramVec { return redisPipelineRequestDuration }
 
 // ================================
 // MySQL 指标
@@ -199,6 +214,49 @@ func init() {
 
 func GetMySQLRequestCounter() CounterVec   { return mysqlRequestsTotal }
 func GetMySQLRequestDuration() HistogramVec { return mysqlRequestDuration }
+
+// ================================
+// Pulsar 指标
+// ================================
+
+var (
+	pulsarProducerTotal    CounterVec
+	pulsarProducerDuration HistogramVec
+	pulsarConsumerTotal    CounterVec
+	pulsarConsumerDuration HistogramVec
+)
+
+func init() {
+	Register(func() {
+		pulsarProducerTotal = NewCounterVec(&CounterVecOpts{
+			Name:   "pulsar_produce_total",
+			Help:   "Total Pulsar producer send operations",
+			Labels: []string{"topic", "success"},
+		})
+		pulsarProducerDuration = NewHistogramVec(&HistogramVecOpts{
+			Name:    "pulsar_produce_duration_seconds",
+			Help:    "Pulsar producer send latency in seconds",
+			Labels:  []string{"topic"},
+			Buckets: DefaultDurationBuckets,
+		})
+		pulsarConsumerTotal = NewCounterVec(&CounterVecOpts{
+			Name:   "pulsar_consume_total",
+			Help:   "Total Pulsar consumer message processing",
+			Labels: []string{"topic", "result"},
+		})
+		pulsarConsumerDuration = NewHistogramVec(&HistogramVecOpts{
+			Name:    "pulsar_consume_duration_seconds",
+			Help:    "Pulsar consumer message processing latency in seconds",
+			Labels:  []string{"topic", "result"},
+			Buckets: DefaultAsyncDurationBuckets,
+		})
+	})
+}
+
+func GetPulsarProducerCounter() CounterVec    { return pulsarProducerTotal }
+func GetPulsarProducerDuration() HistogramVec { return pulsarProducerDuration }
+func GetPulsarConsumerCounter() CounterVec    { return pulsarConsumerTotal }
+func GetPulsarConsumerDuration() HistogramVec { return pulsarConsumerDuration }
 
 // ================================
 // 便捷函数
@@ -268,6 +326,28 @@ func ObserveMySQLQuery(datasource, table, operation string, success bool, durati
 	}
 }
 
+func ObservePulsarProduce(topic string, success bool, duration time.Duration) {
+	s := "true"
+	if !success {
+		s = "false"
+	}
+	if pulsarProducerTotal != nil {
+		pulsarProducerTotal.Inc(topic, s)
+	}
+	if pulsarProducerDuration != nil {
+		pulsarProducerDuration.Observe(duration.Seconds(), topic)
+	}
+}
+
+func ObservePulsarConsume(topic, result string, duration time.Duration) {
+	if pulsarConsumerTotal != nil {
+		pulsarConsumerTotal.Inc(topic, result)
+	}
+	if pulsarConsumerDuration != nil {
+		pulsarConsumerDuration.Observe(duration.Seconds(), topic, result)
+	}
+}
+
 func ObserveRedis(datasource string, success bool, duration time.Duration) {
 	s := "1"
 	if !success {
@@ -278,5 +358,21 @@ func ObserveRedis(datasource string, success bool, duration time.Duration) {
 	}
 	if redisRequestDuration != nil {
 		redisRequestDuration.Observe(duration.Seconds(), datasource)
+	}
+}
+
+// ObserveRedisPipeline records a pipeline batch execution. A batch maps to N
+// underlying commands and has no per-command "hit" semantic, so it is recorded
+// against separate metrics from the single-command path.
+func ObserveRedisPipeline(datasource string, success bool, duration time.Duration) {
+	s := "1"
+	if !success {
+		s = "0"
+	}
+	if redisPipelineRequestsTotal != nil {
+		redisPipelineRequestsTotal.Inc(datasource, s)
+	}
+	if redisPipelineRequestDuration != nil {
+		redisPipelineRequestDuration.Observe(duration.Seconds(), datasource)
 	}
 }

@@ -23,6 +23,10 @@ func TestEnable(t *testing.T) {
 	assert.NotNil(t, GetRedisRequestDuration())
 	assert.NotNil(t, GetMySQLRequestCounter())
 	assert.NotNil(t, GetMySQLRequestDuration())
+	assert.NotNil(t, GetPulsarProducerCounter())
+	assert.NotNil(t, GetPulsarProducerDuration())
+	assert.NotNil(t, GetPulsarConsumerCounter())
+	assert.NotNil(t, GetPulsarConsumerDuration())
 }
 
 func TestObserveHTTPRequest(t *testing.T) {
@@ -78,6 +82,25 @@ func TestObserveMySQLQuery(t *testing.T) {
 	assert.NotPanics(t, func() {
 		ObserveMySQLQuery("main-db", "articles", "query", true, 10*time.Millisecond)
 		ObserveMySQLQuery("main-db", "articles", "create", false, 50*time.Millisecond)
+	})
+}
+
+func TestPulsarMetricsNotNil(t *testing.T) {
+	assert.NotNil(t, GetPulsarProducerCounter())
+	assert.NotNil(t, GetPulsarProducerDuration())
+	assert.NotNil(t, GetPulsarConsumerCounter())
+	assert.NotNil(t, GetPulsarConsumerDuration())
+}
+
+func TestObservePulsarProducer(t *testing.T) {
+	assert.NotPanics(t, func() {
+		ObservePulsarProduce("test-topic", true, 100*time.Millisecond)
+	})
+}
+
+func TestObservePulsarConsume(t *testing.T) {
+	assert.NotPanics(t, func() {
+		ObservePulsarConsume("test-topic", "ack", 50*time.Millisecond)
 	})
 }
 
