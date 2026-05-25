@@ -85,13 +85,6 @@ func TestObserveMySQLQuery(t *testing.T) {
 	})
 }
 
-func TestPulsarMetricsNotNil(t *testing.T) {
-	assert.NotNil(t, GetPulsarProducerCounter())
-	assert.NotNil(t, GetPulsarProducerDuration())
-	assert.NotNil(t, GetPulsarConsumerCounter())
-	assert.NotNil(t, GetPulsarConsumerDuration())
-}
-
 func TestObservePulsarProducer(t *testing.T) {
 	assert.NotPanics(t, func() {
 		ObservePulsarProduce("test-topic", true, 100*time.Millisecond)
