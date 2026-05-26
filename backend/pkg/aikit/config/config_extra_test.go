@@ -10,6 +10,176 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGetInt64(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+big: 9223372036854775807
+int_val: 42
+float_val: 3.9
+str_val: "1234567890123"
+`), 0644))
+
+	ldr, err := New(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(9223372036854775807), ldr.GetInt64("big"))
+	assert.Equal(t, int64(42), ldr.GetInt64("int_val"))
+	assert.Equal(t, int64(3), ldr.GetInt64("float_val"))
+	assert.Equal(t, int64(1234567890123), ldr.GetInt64("str_val"))
+	assert.Equal(t, int64(0), ldr.GetInt64("nonexistent"))
+	assert.Equal(t, int64(99), ldr.GetInt64("nonexistent", 99))
+}
+
+func TestGetUint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+port: 8080
+negative: -1
+str_val: "9999"
+`), 0644))
+
+	ldr, err := New(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, uint(8080), ldr.GetUint("port"))
+	assert.Equal(t, uint(9999), ldr.GetUint("str_val"))
+	// 负数返回 0（无默认值时）
+	assert.Equal(t, uint(0), ldr.GetUint("negative"))
+	assert.Equal(t, uint(0), ldr.GetUint("nonexistent"))
+	assert.Equal(t, uint(42), ldr.GetUint("nonexistent", 42))
+}
+
+func TestEnvFile_ExportPrefix(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	require.NoError(t, os.WriteFile(envPath, []byte(
+		"export APP_HOST=myhost\nexport APP_PORT=9000\n",
+	), 0644))
+
+	cfgPath := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`
+host: ${APP_HOST}
+port: ${APP_PORT}
+`), 0644))
+
+	ldr, err := New(cfgPath, WithEnvFile(envPath))
+	require.NoError(t, err)
+
+	assert.Equal(t, "myhost", ldr.GetString("host"))
+	assert.Equal(t, 9000, ldr.GetInt("port"))
+}
+
+func TestEnvFile_InlineComment(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	require.NoError(t, os.WriteFile(envPath, []byte(
+		"APP_NAME=myapp # this is a comment\nAPP_SECRET=\"keep#this\" # outer comment\n",
+	), 0644))
+
+	cfgPath := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`
+name: ${APP_NAME}
+secret: ${APP_SECRET}
+`), 0644))
+
+	ldr, err := New(cfgPath, WithEnvFile(envPath))
+	require.NoError(t, err)
+
+	assert.Equal(t, "myapp", ldr.GetString("name"))
+	// 带引号的值保留内容原样，不受注释影响
+	assert.Equal(t, "keep#this", ldr.GetString("secret"))
+}
+
+func TestEnvFile_CRLF(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	// Windows-style line endings
+	require.NoError(t, os.WriteFile(envPath, []byte("KEY_A=val1\r\nKEY_B=val2\r\n"), 0644))
+
+	cfgPath := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("a: ${KEY_A}\nb: ${KEY_B}"), 0644))
+
+	ldr, err := New(cfgPath, WithEnvFile(envPath))
+	require.NoError(t, err)
+
+	assert.Equal(t, "val1", ldr.GetString("a"))
+	assert.Equal(t, "val2", ldr.GetString("b"))
+}
+
+func TestWatch_Debounce(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("val: 1"), 0644))
+
+	ldr, err := New(path)
+	require.NoError(t, err)
+	defer ldr.Close()
+
+	callCount := 0
+	require.NoError(t, ldr.Watch(func() {
+		callCount++
+	}))
+
+	// 快速连续写三次，debounce 应只触发一次回调
+	for i := 2; i <= 4; i++ {
+		require.NoError(t, os.WriteFile(path, []byte("val: 10"), 0644))
+	}
+
+	time.Sleep(600 * time.Millisecond)
+	assert.LessOrEqual(t, callCount, 2, "debounce should collapse rapid writes")
+	assert.Equal(t, 10, ldr.GetInt("val"))
+}
+
+func TestNacosServerAddrs_MultiNode(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected []struct{ ip string; port uint64 }
+	}{
+		{
+			"192.168.1.1",
+			[]struct{ ip string; port uint64 }{{"192.168.1.1", 8848}},
+		},
+		{
+			"192.168.1.1:8848",
+			[]struct{ ip string; port uint64 }{{"192.168.1.1", 8848}},
+		},
+		{
+			"192.168.1.1:8848, 192.168.1.2:8848, 192.168.1.3:9999",
+			[]struct{ ip string; port uint64 }{
+				{"192.168.1.1", 8848},
+				{"192.168.1.2", 8848},
+				{"192.168.1.3", 9999},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		result := parseNacosServerAddrs(tc.input)
+		require.Len(t, result, len(tc.expected), "input: %s", tc.input)
+		for i, exp := range tc.expected {
+			assert.Equal(t, exp.ip, result[i].IpAddr, "input: %s node %d ip", tc.input, i)
+			assert.Equal(t, exp.port, result[i].Port, "input: %s node %d port", tc.input, i)
+		}
+	}
+}
+
+func TestSubstituteVariables_CircularReference(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	// a 引用 b，b 引用 a —— 形成循环
+	require.NoError(t, os.WriteFile(path, []byte(`
+a: ${b}
+b: ${a}
+`), 0644))
+
+	_, err := New(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "circular")
+}
+
+
 func TestGetInt(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

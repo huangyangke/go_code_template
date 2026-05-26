@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,7 +23,9 @@ import (
 // NacosConfig 描述 Nacos 配置中心接入参数。
 // 它定义的是“如何连接 Nacos、拉哪些远程配置、是否自动更新”等元信息。
 type NacosConfig struct {
-	// ServerAddr 支持 "host" 或 "host:port"；未显式指定端口时默认 8848。
+	// ServerAddr 支持单地址或多地址（逗号分隔）。
+	// 单地址: "host" 或 "host:port"；未显式指定端口时默认 8848。
+	// 多地址: "host1:8848,host2:8848,host3:8848"。
 	ServerAddr string `yaml:"server_addr"`
 	// Namespace 用于隔离不同环境或项目下的配置空间。
 	Namespace string `yaml:"namespace"`
@@ -208,12 +211,18 @@ func (l *ConfigLoader) loadEnvFiles() error {
 			return fmt.Errorf("config: read .env file %s: %w", path, err)
 		}
 
-		lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+		// 统一换行符，兼容 Windows \r\n
+		normalized := strings.ReplaceAll(string(content), "\r\n", "\n")
+		lines := strings.Split(strings.TrimSpace(normalized), "\n")
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
+
+			// 支持 "export KEY=VALUE" 写法
+			line = strings.TrimPrefix(line, "export ")
+			line = strings.TrimSpace(line)
 
 			parts := strings.SplitN(line, "=", 2)
 			if len(parts) != 2 {
@@ -223,9 +232,21 @@ func (l *ConfigLoader) loadEnvFiles() error {
 			key := strings.TrimSpace(parts[0])
 			val := strings.TrimSpace(parts[1])
 
-			// 移除包裹值的单双引号，兼容常见 .env 写法。
-			val = strings.Trim(val, `"`)
-			val = strings.Trim(val, `'`)
+			// 带引号的值：剥掉外层引号后保留内容原样，不处理行内注释
+			if len(val) >= 2 && val[0] == '"' {
+				if idx := strings.LastIndex(val, "\""); idx > 0 {
+					val = val[1:idx]
+				}
+			} else if len(val) >= 2 && val[0] == '\'' {
+				if idx := strings.LastIndex(val, "'"); idx > 0 {
+					val = val[1:idx]
+				}
+			} else {
+				// 无引号时去掉行内注释（# 之前的部分）
+				if idx := strings.Index(val, " #"); idx >= 0 {
+					val = strings.TrimSpace(val[:idx])
+				}
+			}
 
 			if l.overrideEnv || os.Getenv(key) == "" {
 				os.Setenv(key, val)
@@ -302,6 +323,32 @@ func (l *ConfigLoader) loadNacosConfig() error {
 	return nil
 }
 
+// parseNacosServerAddrs 解析逗号分隔的多节点地址，每个地址支持 "host" 或 "host:port"。
+func parseNacosServerAddrs(serverAddr string) []constant.ServerConfig {
+	var configs []constant.ServerConfig
+	for _, addr := range strings.Split(serverAddr, ",") {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			continue
+		}
+		sc := constant.ServerConfig{Port: 8848}
+		if strings.Contains(addr, ":") {
+			parts := strings.SplitN(addr, ":", 2)
+			sc.IpAddr = parts[0]
+			if port, err := strconv.ParseUint(parts[1], 10, 64); err == nil {
+				sc.Port = port
+			}
+		} else {
+			sc.IpAddr = addr
+		}
+		configs = append(configs, sc)
+	}
+	if len(configs) == 0 {
+		configs = []constant.ServerConfig{{IpAddr: serverAddr, Port: 8848}}
+	}
+	return configs
+}
+
 // initNacosClient 初始化 Nacos 客户端。
 // 该方法采用惰性初始化，避免未使用 Nacos 时创建额外连接。
 func (l *ConfigLoader) initNacosClient() error {
@@ -311,22 +358,7 @@ func (l *ConfigLoader) initNacosClient() error {
 
 	cfg := l.nacosConfig
 
-	// 先按默认端口构造，再根据 "host:port" 形式覆盖。
-	serverConfigs := []constant.ServerConfig{
-		{
-			IpAddr: cfg.ServerAddr,
-			Port:   8848, // 默认 Nacos 端口
-		},
-	}
-
-	// 如果地址里显式带端口，则优先使用显式端口。
-	if strings.Contains(cfg.ServerAddr, ":") {
-		parts := strings.SplitN(cfg.ServerAddr, ":", 2)
-		serverConfigs[0].IpAddr = parts[0]
-		if port, err := strconv.ParseUint(parts[1], 10, 64); err == nil {
-			serverConfigs[0].Port = port
-		}
-	}
+	serverConfigs := parseNacosServerAddrs(cfg.ServerAddr)
 
 	clientConfig := constant.ClientConfig{
 		NamespaceId:         cfg.Namespace,
@@ -374,10 +406,12 @@ func (l *ConfigLoader) fetchNacosConfigs() error {
 			Group:  item.Group,
 		})
 		if err != nil {
+			log.Printf("[config] nacos: get config failed group=%s dataId=%s: %v", item.Group, item.DataID, err)
 			continue
 		}
 
 		if content == "" {
+			log.Printf("[config] nacos: empty config group=%s dataId=%s", item.Group, item.DataID)
 			continue
 		}
 
@@ -456,8 +490,11 @@ func (l *ConfigLoader) setupNacosListeners() error {
 					return
 				}
 
+				log.Printf("[config] nacos: config changed group=%s dataId=%s, reloading", group, dataId)
+
 				// 远程变更后走完整 Reload，保证与初始化流程一致。
 				if err := l.Reload(); err != nil {
+					log.Printf("[config] nacos: reload failed after change group=%s dataId=%s: %v", group, dataId, err)
 					return
 				}
 
@@ -482,10 +519,12 @@ func (l *ConfigLoader) setupNacosListeners() error {
 
 		err := l.nacosClient.ListenConfig(param)
 		if err != nil {
+			log.Printf("[config] nacos: listen config failed group=%s dataId=%s: %v", item.Group, item.DataID, err)
 			continue
 		}
 
 		l.nacosListenerIDs[key] = key
+		log.Printf("[config] nacos: listening on group=%s dataId=%s", item.Group, item.DataID)
 	}
 
 	return nil
@@ -578,18 +617,47 @@ func (l *ConfigLoader) deepMerge(dest, src map[string]interface{}) {
 var varPattern = regexp.MustCompile(`\$\{([^}:]+)(?::([^}]*))?\}`)
 
 // substituteVariables 对整个配置树执行变量替换。
-// 由于一个字段可能间接引用另一个字段，因此这里允许多轮替换；
-// 为防止循环引用导致死循环，最多执行 maxPasses 轮。
+// 若连续两轮后仍有未解析的占位符，说明存在循环引用，返回带有具体 key 的错误。
 func (l *ConfigLoader) substituteVariables() error {
 	const maxPasses = 10
 	for i := 0; i < maxPasses; i++ {
 		changed := l.substituteRecursive(l.config)
 		if !changed {
+			// 收敛了，但可能有未解析的占位符（循环引用收敛到自引用）
+			var stuck []string
+			l.collectUnresolved(l.config, "", &stuck)
+			if len(stuck) > 0 {
+				return fmt.Errorf("config: circular variable reference detected in keys: %s", strings.Join(stuck, ", "))
+			}
 			return nil
 		}
 	}
 
-	return fmt.Errorf("config: variable substitution may have circular references (max passes exceeded)")
+	// 超出最大轮数，同样检查残留占位符
+	var stuck []string
+	l.collectUnresolved(l.config, "", &stuck)
+	if len(stuck) > 0 {
+		return fmt.Errorf("config: circular variable reference detected in keys: %s", strings.Join(stuck, ", "))
+	}
+	return fmt.Errorf("config: variable substitution did not converge after %d passes", maxPasses)
+}
+
+// collectUnresolved 递归收集仍含 ${...} 占位符的配置 key（点路径格式）。
+func (l *ConfigLoader) collectUnresolved(data map[string]interface{}, prefix string, out *[]string) {
+	for k, v := range data {
+		fullKey := k
+		if prefix != "" {
+			fullKey = prefix + "." + k
+		}
+		switch val := v.(type) {
+		case string:
+			if varPattern.MatchString(val) {
+				*out = append(*out, fullKey)
+			}
+		case map[string]interface{}:
+			l.collectUnresolved(val, fullKey, out)
+		}
+	}
 }
 
 // substituteRecursive 递归遍历 map，处理其中的字符串、数组和嵌套 map。
@@ -672,6 +740,9 @@ func (l *ConfigLoader) substituteString(s string) interface{} {
 			}
 
 			value := l.resolveValue(key, defaultVal)
+			if value == nil {
+				return s // 未解析时保留原占位符，交由循环引用检测处理
+			}
 			return l.convertType(value)
 		}
 	}
@@ -687,6 +758,9 @@ func (l *ConfigLoader) substituteString(s string) interface{} {
 			}
 
 			value := l.resolveValue(key, defaultVal)
+			if value == nil {
+				return match // 未解析时保留原占位符
+			}
 			return fmt.Sprintf("%v", l.convertType(value))
 		}
 		return match
@@ -827,6 +901,68 @@ func (l *ConfigLoader) GetInt(key string, defaultValue ...int) int {
 	case string:
 		if i, err := strconv.Atoi(v); err == nil {
 			return i
+		}
+	}
+	if len(defaultValue) > 0 {
+		return defaultValue[0]
+	}
+	return 0
+}
+
+// GetInt64 获取 int64 值，支持 int / int64 / float64 / string 等常见输入。
+func (l *ConfigLoader) GetInt64(key string, defaultValue ...int64) int64 {
+	value := l.Get(key)
+	if value == nil {
+		if len(defaultValue) > 0 {
+			return defaultValue[0]
+		}
+		return 0
+	}
+
+	switch v := value.(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case float64:
+		return int64(v)
+	case string:
+		if i, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return i
+		}
+	}
+	if len(defaultValue) > 0 {
+		return defaultValue[0]
+	}
+	return 0
+}
+
+// GetUint 获取 uint 值，支持 int / int64 / float64 / string 等常见输入。
+func (l *ConfigLoader) GetUint(key string, defaultValue ...uint) uint {
+	value := l.Get(key)
+	if value == nil {
+		if len(defaultValue) > 0 {
+			return defaultValue[0]
+		}
+		return 0
+	}
+
+	switch v := value.(type) {
+	case int:
+		if v >= 0 {
+			return uint(v)
+		}
+	case int64:
+		if v >= 0 {
+			return uint(v)
+		}
+	case float64:
+		if v >= 0 {
+			return uint(v)
+		}
+	case string:
+		if u, err := strconv.ParseUint(v, 10, 64); err == nil {
+			return uint(u)
 		}
 	}
 	if len(defaultValue) > 0 {
@@ -1041,10 +1177,24 @@ func (l *ConfigLoader) Watch(callback func()) error {
 	}
 
 	go func() {
+		// debounce timer：收到事件后等待 200ms，期间新事件重置计时。
+		// 兼容编辑器原子保存（Rename + Write 序列）和 Vim :w（Write + Remove + Create）。
+		const debounceDelay = 200 * time.Millisecond
+		var debounceTimer *time.Timer
+
+		triggerReload := func() {
+			if err := l.load(); err == nil && callback != nil {
+				callback()
+			}
+		}
+
 		for {
 			select {
 			case event, ok := <-watcher.Events:
 				if !ok {
+					if debounceTimer != nil {
+						debounceTimer.Stop()
+					}
 					return
 				}
 
@@ -1052,21 +1202,22 @@ func (l *ConfigLoader) Watch(callback func()) error {
 				if err != nil {
 					continue
 				}
-				// 只有目标文件本身的事件才触发 reload，目录下其他文件会被忽略。
 				if _, exists := watchedFiles[eventPath]; !exists {
 					continue
 				}
 
-				// Write / Create / Rename 都可能意味着配置内容实际发生了变化。
 				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
-					time.Sleep(100 * time.Millisecond) // 简单防抖，避免一次保存触发多次 reload。
-					if err := l.load(); err == nil && callback != nil {
-						callback()
+					if debounceTimer != nil {
+						debounceTimer.Stop()
 					}
+					debounceTimer = time.AfterFunc(debounceDelay, triggerReload)
 				}
 
 			case _, ok := <-watcher.Errors:
 				if !ok {
+					if debounceTimer != nil {
+						debounceTimer.Stop()
+					}
 					return
 				}
 			}
