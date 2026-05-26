@@ -57,20 +57,30 @@ func main() {
 		EnableSwagger:    true,
 	})
 
-	if dsn := loader.GetString("mysql.dsn"); dsn != "" {
-		a.RegisterMySQL("default", &dbmysql.Config{
-			DSN:          dsn,
-			MaxOpenConns: loader.GetInt("mysql.max_open_conns", 20),
-			MaxIdleConns: loader.GetInt("mysql.max_idle_conns", 5),
-		})
+	if loader.GetString("mysql.dsn") != "" {
+		var mysqlCfg dbmysql.Config
+		if err := loader.Scan("mysql", &mysqlCfg); err != nil {
+			panic(fmt.Sprintf("load mysql config: %v", err))
+		}
+		mysqlCfg.Name = "default"
+		mysqlCfg.Fix()
+		if err := mysqlCfg.Validate(); err != nil {
+			panic(err.Error())
+		}
+		a.RegisterMySQL("default", &mysqlCfg)
 	}
 
-	if addrs := loader.GetString("redis.addr"); addrs != "" {
-		a.RegisterRedis("default", &dbredis.Config{
-			Addrs:        []string{addrs},
-			UserPassword: loader.GetString("redis.password"),
-			DB:           loader.GetInt("redis.db", 0),
-		})
+	if len(loader.GetStringSlice("redis.addrs")) > 0 {
+		var redisCfg dbredis.Config
+		if err := loader.Scan("redis", &redisCfg); err != nil {
+			panic(fmt.Sprintf("load redis config: %v", err))
+		}
+		redisCfg.Name = "default"
+		redisCfg.Fix()
+		if err := redisCfg.Validate(); err != nil {
+			panic(err.Error())
+		}
+		a.RegisterRedis("default", &redisCfg)
 	}
 
 	a.SetRouteRegistrar(func(e *gin.Engine) {

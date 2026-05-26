@@ -100,7 +100,7 @@ func TestConfig_fix_Panics(t *testing.T) {
 			}
 		}()
 		c := &Config{Addrs: []string{"127.0.0.1:6379"}, Type: StandaloneType}
-		c.fix()
+		c.Fix(); if err := c.Validate(); err != nil { panic(err.Error()) }
 	})
 
 	t.Run("no addrs", func(t *testing.T) {
@@ -110,7 +110,7 @@ func TestConfig_fix_Panics(t *testing.T) {
 			}
 		}()
 		c := &Config{Name: "test"}
-		c.fix()
+		c.Fix(); if err := c.Validate(); err != nil { panic(err.Error()) }
 	})
 
 	t.Run("sentinel no master", func(t *testing.T) {
@@ -124,6 +124,6 @@ func TestConfig_fix_Panics(t *testing.T) {
 			Addrs: []string{"127.0.0.1:26379"},
 			Type:  SentinelType,
 		}
-		c.fix()
+		c.Fix(); if err := c.Validate(); err != nil { panic(err.Error()) }
 	})
 }

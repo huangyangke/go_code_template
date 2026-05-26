@@ -40,6 +40,8 @@ type (
 		SentinelUserName string        `yaml:"sentinel_username"`
 		SentinelPassword string        `yaml:"sentinel_password"`
 		DB               int           `yaml:"db"`
+		// DisableKeyPrefix 完全跳过 KeyPrefix 拼接；仅在调用方已自行管理 key 命名空间时使用。
+		DisableKeyPrefix bool          `yaml:"disable_key_prefix"`
 		hooks            []redis.Hook  `yaml:"-"` // Redis command hooks
 		logger           logger        `yaml:"-"` // Custom logger
 	}
@@ -72,7 +74,10 @@ func New(c *Config, opts ...Option) *Redis {
 	for _, opt := range opts {
 		opt(c)
 	}
-	c.fix()
+	c.Fix()
+	if err := c.Validate(); err != nil {
+		panic(err.Error())
+	}
 	c.hooks = append([]redis.Hook{NewPrometheusHook(c.Name)}, c.hooks...)
 	log.Info("[Redis][connect_start][type=%s][addrs=%v][db=%d]", c.Type, c.Addrs, c.DB)
 
@@ -169,6 +174,13 @@ func (c *Config) newStandaloneClient() *redis.Client {
 }
 
 
+// DefaultConfig returns a Config with sensible defaults (sharing them with Fix()).
+func DefaultConfig() Config {
+	var c Config
+	c.Fix()
+	return c
+}
+
 // Fix fills default values for zero/empty fields
 func (c *Config) Fix() {
 	if c.Type == "" {
@@ -214,13 +226,6 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func (c *Config) fix() {
-	c.Fix()
-	if err := c.Validate(); err != nil {
-		panic(err.Error())
-	}
-}
-
 // Cmdable returns the underlying redis.Cmdable for generic usage.
 func (r *Redis) Cmdable() redis.Cmdable {
 	return r.client
@@ -251,7 +256,7 @@ func (r *Redis) Standalone() *redis.Client {
 }
 
 func (r *Redis) key(key string) string {
-	if r.config.KeyPrefix != "" {
+	if r.config.KeyPrefix != "" && !r.config.DisableKeyPrefix {
 		return fmt.Sprintf("%s:%s", r.config.KeyPrefix, key)
 	}
 	return key

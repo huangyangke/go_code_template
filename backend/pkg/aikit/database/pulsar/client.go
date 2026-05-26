@@ -47,12 +47,6 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func (c *Config) fix() {
-	c.Fix()
-	if err := c.Validate(); err != nil {
-		panic(err.Error())
-	}
-}
 
 // Client wraps pulsar.Client and is the entry point for creating producers and consumers.
 type Client struct {
@@ -88,7 +82,10 @@ func New(c *Config, opts ...Option) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
-	c.fix()
+	c.Fix()
+	if err := c.Validate(); err != nil {
+		panic(err.Error())
+	}
 
 	log.Info("[Pulsar][connect_start][url=%s]", c.URL)
 
@@ -108,11 +105,6 @@ func New(c *Config, opts ...Option) *Client {
 
 	log.Info("[Pulsar][connected][url=%s]", c.URL)
 	return &Client{client: client, config: c}
-}
-
-// MustNew is an alias for New (both panic on error).
-func MustNew(c *Config, opts ...Option) *Client {
-	return New(c, opts...)
 }
 
 // Close closes the underlying Pulsar client.

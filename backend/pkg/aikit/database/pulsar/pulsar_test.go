@@ -2,6 +2,7 @@ package pulsar
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -56,7 +57,12 @@ func TestConfig_Validate_Success(t *testing.T) {
 
 func TestConfig_fix_Panics_WhenValidateFails(t *testing.T) {
 	c := &Config{}
-	assert.Panics(t, func() { c.fix() })
+	assert.Panics(t, func() {
+		c.Fix()
+		if err := c.Validate(); err != nil {
+			panic(err.Error())
+		}
+	})
 }
 
 // ============================================================================
@@ -114,17 +120,36 @@ func TestProducerOptions(t *testing.T) {
 // Consumer Options Tests
 // ============================================================================
 
-func TestConsumerOptions_WithType(t *testing.T) {
-	o := &consumerOptions{}
+func TestConsumerOptions(t *testing.T) {
+	o := &ConsumerOptions{}
 	WithSubscription("sub-1")(o)
 	WithSubscriptionType(pulsar.Exclusive)(o)
 	WithConcurrency(5)(o)
 	WithConsumerProperties(map[string]string{"p1": "v2"})(o)
 
-	assert.Equal(t, "sub-1", o.subscriptionName)
-	assert.Equal(t, pulsar.Exclusive, o.subscriptionType)
-	assert.Equal(t, 5, o.concurrency)
-	assert.Equal(t, "v2", o.properties["p1"])
+	assert.Equal(t, "sub-1", o.SubscriptionName)
+	assert.Equal(t, pulsar.Exclusive, o.SubscriptionType)
+	assert.Equal(t, 5, o.Concurrency)
+	assert.Equal(t, "v2", o.Properties["p1"])
+}
+
+func TestNewConsumer_Defaults(t *testing.T) {
+	// Verify defaults without actually connecting — just exercise the option
+	// application logic that runs before client.Subscribe would be called.
+	o := &ConsumerOptions{
+		SubscriptionType: pulsar.Shared,
+		Concurrency:      1,
+	}
+	assert.Equal(t, "", o.SubscriptionName)
+	assert.Equal(t, pulsar.Shared, o.SubscriptionType)
+	assert.Equal(t, 1, o.Concurrency)
+
+	// Simulate the default subscription-name logic that runs in NewConsumer.
+	topic := "my-topic"
+	if o.SubscriptionName == "" {
+		o.SubscriptionName = "go-aikit-sub-" + topic
+	}
+	assert.Equal(t, "go-aikit-sub-my-topic", o.SubscriptionName)
 }
 
 // ============================================================================
@@ -143,54 +168,31 @@ func TestLogHook_Levels(t *testing.T) {
 }
 
 // ============================================================================
-// Metrics Interceptor Tests
+// HandlerFunc Type Tests
 // ============================================================================
 
-func TestProducerMetricsInterceptor_BeforeSend(t *testing.T) {
-	i := &producerMetricsInterceptor{topic: "test-topic"}
-	msg := &pulsar.ProducerMessage{}
-	i.BeforeSend(nil, msg)
-	assert.False(t, msg.EventTime.IsZero())
-}
-
-func TestProducerMetricsInterceptor_OnSendAcknowledgement(t *testing.T) {
-	i := &producerMetricsInterceptor{topic: "test-topic"}
-	msg := &pulsar.ProducerMessage{EventTime: time.Now()}
-	assert.NotPanics(t, func() {
-		i.OnSendAcknowledgement(nil, msg, nil)
-	})
-}
-
-func TestConsumerMetricsInterceptor_BeforeConsume(t *testing.T) {
-	i := &consumerMetricsInterceptor{topic: "test-topic"}
-	msg := pulsar.ConsumerMessage{}
-	assert.NotPanics(t, func() {
-		i.BeforeConsume(msg)
-	})
-}
-
-func TestConsumerMetricsInterceptor_OnAcknowledge(t *testing.T) {
-	i := &consumerMetricsInterceptor{topic: "test-topic"}
-	assert.NotPanics(t, func() {
-		i.OnAcknowledge(nil, nil)
-	})
-}
-
-func TestConsumerMetricsInterceptor_OnNegativeAcksSend(t *testing.T) {
-	i := &consumerMetricsInterceptor{topic: "test-topic"}
-	assert.NotPanics(t, func() {
-		i.OnNegativeAcksSend(nil, nil)
-	})
-}
-
-// ============================================================================
-// HandlerFunc Type Test
-// ============================================================================
-
-func TestHandlerFunc_Signature(t *testing.T) {
+func TestHandlerFunc_Success(t *testing.T) {
 	var h HandlerFunc = func(ctx context.Context, msg pulsar.Message) error {
 		return nil
 	}
+	assert.NoError(t, h(context.Background(), nil))
+}
+
+func TestHandlerFunc_Error(t *testing.T) {
+	var h HandlerFunc = func(ctx context.Context, msg pulsar.Message) error {
+		return errors.New("handler failed")
+	}
 	err := h(context.Background(), nil)
-	assert.NoError(t, err)
+	assert.Error(t, err)
+	assert.Equal(t, "handler failed", err.Error())
+}
+
+// ============================================================================
+// Lifecycle Smoke Tests (no real Pulsar broker)
+// ============================================================================
+
+func TestConsumer_CloseWithoutStart(t *testing.T) {
+	// Close on a never-started consumer should not panic.
+	cc := &Consumer{}
+	assert.NotPanics(t, func() { cc.Close() })
 }

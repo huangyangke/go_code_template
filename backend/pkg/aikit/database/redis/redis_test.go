@@ -2,6 +2,7 @@ package redis
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -36,7 +37,7 @@ func TestConfig_fix_Defaults(t *testing.T) {
 		Name:  "test",
 		Addrs: []string{"localhost:6379"},
 	}
-	cfg.fix()
+	cfg.Fix()
 	assert.Equal(t, ClusterType, cfg.Type)
 	assert.Equal(t, 16, cfg.PoolSize)
 	assert.Equal(t, 3, cfg.MaxRetries)
@@ -57,4 +58,25 @@ func TestKeyNoPrefix(t *testing.T) {
 		client: nil,
 	}
 	assert.Equal(t, "users", r.key("users"))
+}
+
+func TestKeyDisableKeyPrefix(t *testing.T) {
+	r := &Redis{
+		config: &Config{KeyPrefix: "myapp", DisableKeyPrefix: true},
+		client: nil,
+	}
+	assert.Equal(t, "users", r.key("users"))
+}
+
+func TestDefaultConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	assert.Equal(t, ClusterType, cfg.Type)
+	assert.Equal(t, 16, cfg.PoolSize)
+	assert.Equal(t, 3, cfg.MaxRetries)
+	assert.Equal(t, 4, cfg.MinIdleConns)
+	assert.Equal(t, 3*time.Second, cfg.DialTimeout)
+	assert.Equal(t, time.Second, cfg.ReadTimeout)
+	assert.Equal(t, time.Second, cfg.WriteTimeout)
+	assert.Equal(t, time.Minute, cfg.IdleTimeout)
+	assert.Equal(t, 3*time.Second, cfg.PingTimeout)
 }
