@@ -13,9 +13,9 @@ type contextTxKey struct{}
 // automatically participate in any ongoing transaction.
 func (d *Database) TxDB(ctx context.Context) *gorm.DB {
 	if tx, ok := ctx.Value(contextTxKey{}).(*gorm.DB); ok {
-		return tx
+		return tx // 有事务，返回事务
 	}
-	return d.DB
+	return d.DB // 无事务，返回普通数据库连接
 }
 
 // WithContext returns a *gorm.DB that is context-aware: if a transaction
@@ -29,8 +29,8 @@ func (d *Database) WithContext(ctx context.Context) *gorm.DB {
 // into ctx so that any code calling TxDB(ctx) within fn will use the transaction.
 func (d *Database) ExecTx(ctx context.Context, fn func(ctx context.Context) error) error {
 	return d.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		ctx = context.WithValue(ctx, contextTxKey{}, tx)
-		return fn(ctx)
+		ctx = context.WithValue(ctx, contextTxKey{}, tx) // ctx 绑定 事务tx
+		return fn(ctx) // 执行业务逻辑函数
 	})
 }
 

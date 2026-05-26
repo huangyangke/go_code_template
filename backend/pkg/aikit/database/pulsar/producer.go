@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/apache/pulsar-client-go/pulsar"
+
+	"github.com/example/go-template/pkg/aikit/metrics"
 )
 
 // Producer wraps pulsar.Producer.
@@ -75,10 +77,6 @@ func (c *Client) NewProducer(topic string, opts ...ProducerOption) (*Producer, e
 	}
 	cfg.fix()
 
-	interceptors := cfg.Interceptors
-	// Auto-inject metrics interceptor
-	interceptors = append([]pulsar.ProducerInterceptor{&producerMetricsInterceptor{topic: topic}}, interceptors...)
-
 	p, err := c.client.CreateProducer(pulsar.ProducerOptions{
 		Topic:                   cfg.Topic,
 		Name:                    cfg.Name,
@@ -86,7 +84,7 @@ func (c *Client) NewProducer(topic string, opts ...ProducerOption) (*Producer, e
 		CompressionType:         cfg.CompressionType,
 		DisableBlockIfQueueFull: cfg.DisableBlockIfQueueFull,
 		Properties:              cfg.Properties,
-		Interceptors:            interceptors,
+		Interceptors:            cfg.Interceptors,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pulsar: create producer: %w", err)
@@ -104,22 +102,38 @@ func (c *Client) MustNewProducer(topic string, opts ...ProducerOption) *Producer
 }
 
 // Send sends a raw byte payload synchronously.
+// Records metrics (success, failure, duration) at the wrapper level, so failed
+// sends are visible to Prometheus unlike the interceptor-only approach.
 func (p *Producer) Send(ctx context.Context, data []byte) (pulsar.MessageID, error) {
-	return p.producer.Send(ctx, &pulsar.ProducerMessage{Payload: data})
+	start := time.Now()
+	id, err := p.producer.Send(ctx, &pulsar.ProducerMessage{Payload: data})
+	metrics.ObservePulsarProduce(p.topic, err == nil, time.Since(start))
+	return id, err
 }
 
 // SendAsync sends a raw byte payload asynchronously.
+// The callback is wrapped to record metrics (success, failure, duration) when
+// the send result is known. With DisableBlockIfQueueFull=true, some sends may
+// error before the callback is invoked — those errors are not observable here.
 func (p *Producer) SendAsync(ctx context.Context, data []byte, callback func(pulsar.MessageID, *pulsar.ProducerMessage, error)) {
-	p.producer.SendAsync(ctx, &pulsar.ProducerMessage{Payload: data}, callback)
+	start := time.Now()
+	p.producer.SendAsync(ctx, &pulsar.ProducerMessage{Payload: data}, func(id pulsar.MessageID, msg *pulsar.ProducerMessage, err error) {
+		metrics.ObservePulsarProduce(p.topic, err == nil, time.Since(start))
+		if callback != nil {
+			callback(id, msg, err)
+		}
+	})
 }
 
-// SendObj marshals obj to JSON and sends it as a string message.
+// SendObj marshals obj to JSON and sends it synchronously.
+// Payload is sent as raw bytes (not schema-encoded), so non-Go consumers see
+// plain JSON without Pulsar schema framing.
 func (p *Producer) SendObj(ctx context.Context, obj interface{}) (pulsar.MessageID, error) {
 	bs, err := json.Marshal(obj)
 	if err != nil {
 		return nil, fmt.Errorf("pulsar: marshal message: %w", err)
 	}
-	return p.producer.Send(ctx, &pulsar.ProducerMessage{Value: string(bs)})
+	return p.Send(ctx, bs)
 }
 
 // Close closes the producer.

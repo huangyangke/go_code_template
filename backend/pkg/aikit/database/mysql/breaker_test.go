@@ -19,6 +19,14 @@ func openBreakerTestDB(t *testing.T, cfg resilience.Config) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get sql db: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		_ = sqlDB.Close()
+	})
 	if err := db.AutoMigrate(&testModel{}); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}

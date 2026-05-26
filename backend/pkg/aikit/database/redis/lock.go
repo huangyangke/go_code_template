@@ -50,8 +50,7 @@ type Lock struct {
 }
 
 // NewLock returns a Lock bound to this Redis instance.
-// key is used as-is (key prefix from Redis config is NOT applied, so callers
-// should namespace keys explicitly, e.g. "myservice:lock:resource").
+// key will be prefixed by Redis config KeyPrefix (same as other commands).
 func (r *Redis) NewLock(_ context.Context, key string, expire time.Duration, opts ...LockOption) *Lock {
 	l := &Lock{
 		redis:  r,

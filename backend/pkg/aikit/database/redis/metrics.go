@@ -14,8 +14,6 @@ type prometheusHook struct {
 	name string
 }
 
-type startKey struct{}
-
 // NewPrometheusHook returns a redis.Hook that records metrics.
 func NewPrometheusHook(name string) redis.Hook {
 	return &prometheusHook{name: name}
@@ -40,7 +38,7 @@ func (h *prometheusHook) ProcessPipelineHook(next redis.ProcessPipelineHook) red
 		start := time.Now()
 		err := next(ctx, cmds)
 		success := err == nil
-		metrics.ObserveRedis(h.name, success, time.Since(start))
+		metrics.ObserveRedisPipeline(h.name, success, time.Since(start))
 		return err
 	}
 }
