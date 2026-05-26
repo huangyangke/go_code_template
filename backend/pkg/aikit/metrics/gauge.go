@@ -46,3 +46,15 @@ func (gv *promGaugeVec) Set(v float64, labels ...string) {
 func (gv *promGaugeVec) Close() bool {
 	return prom.Unregister(gv.gauge)
 }
+
+// RegisterGaugeFunc registers a gauge whose value is computed by fn on each scrape.
+// Returns an unregister func that must be called on cleanup to avoid duplicate registration panics.
+func RegisterGaugeFunc(name, help string, constLabels prom.Labels, fn func() float64) func() {
+	g := prom.NewGaugeFunc(prom.GaugeOpts{
+		Name:        name,
+		Help:        help,
+		ConstLabels: constLabels,
+	}, fn)
+	prom.MustRegister(g)
+	return func() { prom.Unregister(g) }
+}

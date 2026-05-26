@@ -12,8 +12,8 @@ func newPromStats(family, name string) *promStats {
 	return &promStats{datasource: cacheName(family, name)}
 }
 
-func (s *promStats) IncrHit()            { metrics.ObserveCache(s.datasource, "l2", "hit") }
-func (s *promStats) IncrMiss()           { metrics.ObserveCache(s.datasource, "l2", "miss") }
+func (s *promStats) IncrHit()            { metrics.ObserveCache(s.datasource, "total", "hit") }
+func (s *promStats) IncrMiss()           { metrics.ObserveCache(s.datasource, "total", "miss") }
 func (s *promStats) IncrLocalHit()       { metrics.ObserveCache(s.datasource, "l1", "hit") }
 func (s *promStats) IncrLocalMiss()      { metrics.ObserveCache(s.datasource, "l1", "miss") }
 func (s *promStats) IncrRemoteHit()      { metrics.ObserveCache(s.datasource, "l2", "hit") }

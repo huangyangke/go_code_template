@@ -14,6 +14,7 @@ import (
 	"github.com/mgtv-tech/jetcache-go/local"
 	"github.com/mgtv-tech/jetcache-go/remote"
 	"github.com/mgtv-tech/jetcache-go/stats"
+	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/example/go-template/pkg/aikit/log"
@@ -79,14 +80,14 @@ var (
 
 // MultiLevelCache implements a multi-level cache (L1 local + L2 Redis) backed by jetcache-go.
 type MultiLevelCache struct {
-	config      Config
-	cache       jcache.Cache
-	redisCmdable redis.Cmdable
-	pubsub      *redis.PubSub
-	stopCh      chan struct{}
-	closeOnce   sync.Once
-	instanceID  string
-	localCache  *trackedLocal
+	config         Config
+	cache          jcache.Cache
+	redisCmdable   redis.Cmdable
+	pubsub         *redis.PubSub
+	stopCh         chan struct{}
+	closeOnce      sync.Once
+	localCache     *trackedLocal
+	unregTaskSize  func()
 }
 
 type trackedLocal struct {
@@ -213,7 +214,6 @@ func New(cfg Config) (*MultiLevelCache, error) {
 	m := &MultiLevelCache{
 		config:     cfg,
 		stopCh:     make(chan struct{}),
-		instanceID: cfg.SourceID,
 	}
 
 	// Build jetcache-go options
@@ -239,10 +239,14 @@ func New(cfg Config) (*MultiLevelCache, error) {
 		))
 	}
 
-	// Create local cache backend (for local or both mode)
-	if cfg.CacheType == CacheTypeLocal || cfg.CacheType == CacheTypeBoth {
+	// Create local cache backend.
+	// trackedLocal (key map) is only needed for CacheTypeLocal where Redis SCAN is unavailable
+	// to enumerate keys on Clear(). For CacheTypeBoth, Clear() uses Redis SCAN + DeleteFromLocalCache.
+	if cfg.CacheType == CacheTypeLocal {
 		m.localCache = newTrackedLocal(m.newLocalCache())
 		opts = append(opts, jcache.WithLocal(m.localCache))
+	} else if cfg.CacheType == CacheTypeBoth {
+		opts = append(opts, jcache.WithLocal(m.newLocalCache()))
 	}
 
 	// Create remote cache backend (for remote or both mode)
@@ -255,12 +259,9 @@ func New(cfg Config) (*MultiLevelCache, error) {
 		}
 	}
 
-	// SyncLocal: cross-instance L1 invalidation via EventHandler
+	// SyncLocal: cross-instance L1 invalidation via jetcache-go built-in mechanism.
 	if cfg.SyncLocal && cfg.CacheType == CacheTypeBoth {
-		opts = append(opts,
-			jcache.WithSyncLocal(true),
-			jcache.WithEventHandler(m.handleSyncLocalEvent),
-		)
+		opts = append(opts, jcache.WithSyncLocal(true))
 	}
 
 	m.cache = jcache.New(opts...)
@@ -272,6 +273,14 @@ func New(cfg Config) (*MultiLevelCache, error) {
 
 	log.Info("[Cache][%s/%s][created][type=%s][local=%s][codec=%s]",
 		cfg.Family, cfg.Name, cfg.CacheType, cfg.LocalType, cfg.Codec)
+
+	m.unregTaskSize = metrics.RegisterGaugeFunc(
+		"cache_refresh_task_size",
+		"Number of in-flight async cache refresh tasks",
+		prom.Labels{"name": cacheName(cfg.Family, cfg.Name)},
+		func() float64 { return float64(m.cache.TaskSize()) },
+	)
+
 	return m, nil
 }
 
@@ -408,6 +417,10 @@ func (m *MultiLevelCache) Exists(ctx context.Context, key string) bool {
 	return m.cache.Exists(ctx, m.buildKey(key))
 }
 
+// Inner returns the underlying jetcache-go Cache.
+// Use jcache.NewT[K, V](mc.Inner()) for type-safe generic access.
+func (m *MultiLevelCache) Inner() jcache.Cache { return m.cache }
+
 // Clear removes all cache entries
 func (m *MultiLevelCache) Clear(ctx context.Context) error {
 	var remoteErr error
@@ -431,6 +444,9 @@ func (m *MultiLevelCache) Clear(ctx context.Context) error {
 					remoteErr = err
 					break
 				}
+				for _, k := range keys {
+					m.cache.DeleteFromLocalCache(k)
+				}
 			}
 			if newCursor == 0 {
 				break
@@ -451,34 +467,15 @@ func (m *MultiLevelCache) Close() error {
 	m.closeOnce.Do(func() {
 		close(m.stopCh)
 	})
+	// Unregister gauge before closing cache so a concurrent Prometheus scrape
+	// can't invoke TaskSize() on a closed jetcache-go instance.
+	m.unregTaskSize()
 	m.cache.Close()
 	if m.pubsub != nil {
 		_ = m.pubsub.Close()
 	}
 	log.Info("[Cache][%s/%s][closed]", m.config.Family, m.config.Name)
 	return nil
-}
-
-// handleSyncLocalEvent handles SyncLocal events from jetcache-go.
-// When SyncLocal is enabled, jetcache-go sends events on Set/Delete.
-// We publish these to Redis Pub/Sub for cross-instance propagation.
-func (m *MultiLevelCache) handleSyncLocalEvent(event *jcache.Event) {
-	if m.redisCmdable == nil || m.config.EventChannel == "" {
-		return
-	}
-	data, err := json.Marshal(map[string]interface{}{
-		"action":    "invalidate",
-		"keys":      event.Keys,
-		"source":    event.SourceID,
-		"eventType": int(event.EventType),
-	})
-	if err != nil {
-		log.Warn("[Cache][%s/%s][sync_local_marshal_error]: %v", m.config.Family, m.config.Name, err)
-		return
-	}
-	if err := m.redisCmdable.Publish(context.Background(), m.config.EventChannel, string(data)).Err(); err != nil {
-		log.Warn("[Cache][%s/%s][sync_local_publish_error]: %v", m.config.Family, m.config.Name, err)
-	}
 }
 
 // startEventSubscription listens for invalidate events from Redis Pub/Sub (legacy mode).
@@ -519,8 +516,7 @@ func (m *MultiLevelCache) handleEvent(data string) {
 		return
 	}
 	action, _ := event["action"].(string)
-	source, _ := event["source"].(string)
-	if action != "invalidate" || source == m.instanceID {
+	if action != "invalidate" {
 		return
 	}
 	keys, _ := event["keys"].([]interface{})
@@ -548,31 +544,48 @@ func (m *MultiLevelCache) handleEvent(data string) {
 	}
 }
 
-// resubscribeEvents attempts to re-subscribe after a disconnection.
+// resubscribeEvents attempts to re-subscribe after a disconnection, with exponential backoff.
 func (m *MultiLevelCache) resubscribeEvents() {
-	time.Sleep(1 * time.Second)
 	if m.redisCmdable == nil {
 		return
 	}
-	pubsub := m.subscribeRedis(context.Background(), m.config.EventChannel)
-	if pubsub == nil {
-		return
-	}
-	m.pubsub = pubsub
-	log.Info("[Cache][%s/%s][event_resubscribed][channel=%s]",
-		m.config.Family, m.config.Name, m.config.EventChannel)
-
-	ch := pubsub.Channel()
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
 	for {
 		select {
 		case <-m.stopCh:
 			return
-		case msg, ok := <-ch:
-			if !ok {
-				m.resubscribeEvents()
+		case <-time.After(backoff):
+		}
+		pubsub := m.subscribeRedis(context.Background(), m.config.EventChannel)
+		if pubsub == nil {
+			return
+		}
+		m.pubsub = pubsub
+		log.Info("[Cache][%s/%s][event_resubscribed][channel=%s]",
+			m.config.Family, m.config.Name, m.config.EventChannel)
+		ch := pubsub.Channel()
+		disconnected := false
+		gotMessage := false
+		for !disconnected {
+			select {
+			case <-m.stopCh:
 				return
+			case msg, ok := <-ch:
+				if !ok {
+					disconnected = true
+				} else {
+					gotMessage = true
+					m.handleEvent(msg.Payload)
+				}
 			}
-			m.handleEvent(msg.Payload)
+		}
+		// Reset backoff after a session that delivered traffic; keep escalating
+		// if we're flapping (subscribed but never received before disconnect).
+		if gotMessage {
+			backoff = time.Second
+		} else if backoff < maxBackoff {
+			backoff *= 2
 		}
 	}
 }
