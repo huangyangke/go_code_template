@@ -180,3 +180,84 @@ func TestRecoverPending_ClaimsEligibleEntries(t *testing.T) {
 		t.Fatal("recoverPending timed out")
 	}
 }
+
+// TestNewConsumer_ZeroWorkerCapacity_DoesNotDeadlock verifies that
+// WithScheduler(SchedulerConfig{}) leaves WorkerCapacity at a safe default
+// instead of creating semaphore.NewWeighted(0) which blocks forever.
+func TestNewConsumer_ZeroWorkerCapacity_DoesNotDeadlock(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+
+	c := NewConsumer(
+		rdb, RedisConfig{StreamKey: "test:stream"},
+		map[string]EndpointConfig{},
+		"test",
+		WithScheduler(SchedulerConfig{}), // zero capacity
+	)
+
+	assert.Equal(t, DefaultWorkerCapacity, c.scheduler.WorkerCapacity,
+		"zero WorkerCapacity should default to %d, got %d",
+		DefaultWorkerCapacity, c.scheduler.WorkerCapacity)
+	assert.NotNil(t, c.sem, "semaphore must be created")
+}
+
+// TestConsumer_Stop_WaitsForHandlerDrain verifies that Stop waits for
+// in-flight handlers to finish before returning.
+func TestConsumer_Stop_WaitsForHandlerDrain(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+
+	handlerStarted := make(chan struct{})
+	letHandlerFinish := make(chan struct{})
+	handlerDone := make(chan struct{})
+
+	c := NewConsumer(
+		rdb, RedisConfig{StreamKey: "test:stream"},
+		map[string]EndpointConfig{
+			"/ep": {
+				Handler: func(ctx Context) (any, error) {
+					close(handlerStarted)
+					<-letHandlerFinish // block until test signals
+					close(handlerDone)
+					return nil, nil
+				},
+			},
+		},
+		"test",
+	)
+
+	c.spawnHandleTask(context.Background(), "msg-1", map[string]any{
+		"task_id":  "t1",
+		"endpoint": "/ep",
+		"priority": 5,
+	})
+
+	<-handlerStarted
+
+	stopDone := make(chan struct{})
+	go func() {
+		c.Stop()
+		close(stopDone)
+	}()
+
+	// Stop must NOT return while the handler is still running.
+	select {
+	case <-stopDone:
+		t.Fatal("Stop returned while handler was still blocked — WaitGroup drain broken")
+	case <-time.After(50 * time.Millisecond):
+		// Good - Stop is waiting
+	}
+
+	close(letHandlerFinish)
+
+	// Now Stop should complete soon after handler exits.
+	select {
+	case <-stopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not complete after handler finished")
+	}
+
+	select {
+	case <-handlerDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not finish")
+	}
+}

@@ -7,9 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRateLimit_AllowsUnderLimit(t *testing.T) {
@@ -40,6 +42,42 @@ func TestRateLimit_FailOpen(t *testing.T) {
 		r.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusOK, w.Code)
 	}
+}
+
+func TestRateLimit_CustomKeyPrefix(t *testing.T) {
+	mr := miniredis.NewMiniRedis()
+	require.NoError(t, mr.Start())
+	t.Cleanup(mr.Close)
+
+	rdb := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
+	defer rdb.Close()
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(RateLimit(rdb, RateLimitConfig{
+		Limit:     1,
+		Window:    time.Minute,
+		KeyPrefix: "myapp:rl",
+	}))
+	r.GET("/api", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	// First request passes, second is rate limited
+	for i := 0; i < 1; i++ {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodGet, "/api", nil)
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	}
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api", nil)
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusTooManyRequests, w.Code)
+
+	// Verify the custom prefix is used in the Redis key
+	keys := mr.Keys()
+	assert.NotEmpty(t, keys)
+	assert.True(t, len(keys[0]) > 8 && keys[0][:8] == "myapp:rl",
+		"expected key with prefix 'myapp:rl', got %q", keys[0])
 }
 
 func TestRateLimit_DefaultKeyFunc(t *testing.T) {

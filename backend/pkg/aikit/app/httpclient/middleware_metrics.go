@@ -15,19 +15,19 @@ const maxTrackedPaths = 100
 // cardinalityGuard caps the number of unique path label values to prevent
 // metric cardinality explosion when callers use URLs with dynamic segments.
 type cardinalityGuard struct {
-	paths    sync.Map
-	count    int64
+	paths sync.Map
+	count int64
 }
 
 func (g *cardinalityGuard) safePath(path string) string {
-	if _, ok := g.paths.Load(path); ok {
+	if _, loaded := g.paths.LoadOrStore(path, struct{}{}); loaded {
 		return path
 	}
-	if atomic.LoadInt64(&g.count) >= maxTrackedPaths {
+	if atomic.AddInt64(&g.count, 1) > maxTrackedPaths {
+		g.paths.Delete(path)
+		atomic.AddInt64(&g.count, -1)
 		return "high_cardinality_path"
 	}
-	g.paths.Store(path, struct{}{})
-	atomic.AddInt64(&g.count, 1)
 	return path
 }
 

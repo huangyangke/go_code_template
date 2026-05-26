@@ -76,3 +76,31 @@ func TestTokenAuth_Whitelist(t *testing.T) {
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 }
+
+func TestTokenAuth_InvalidScheme(t *testing.T) {
+	r := gin.New()
+	r.Use(TokenAuth(func(ctx context.Context, token string) (bool, error) {
+		return true, nil
+	}))
+	r.GET("/secret", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/secret", nil)
+	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestTokenAuth_VerifyError(t *testing.T) {
+	r := gin.New()
+	r.Use(TokenAuth(func(ctx context.Context, token string) (bool, error) {
+		return false, context.Canceled
+	}))
+	r.GET("/secret", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/secret", nil)
+	req.Header.Set("Authorization", "Bearer mytoken")
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}

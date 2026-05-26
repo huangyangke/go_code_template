@@ -24,8 +24,14 @@ func TokenAuth(verify VerifyFunc, whitelist ...string) gin.HandlerFunc {
 		}
 
 		auth := c.GetHeader("Authorization")
+		// Explicitly require "Bearer " scheme; reject non-Bearer or bare tokens.
+		if !strings.HasPrefix(auth, "Bearer ") {
+			response.Unauthorized(c)
+			c.Abort()
+			return
+		}
 		token := strings.TrimPrefix(auth, "Bearer ")
-		if token == "" || token == auth {
+		if token == "" {
 			response.Unauthorized(c)
 			c.Abort()
 			return

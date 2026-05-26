@@ -103,14 +103,18 @@ func (s *StatusStore) InitQueued(ctx context.Context, taskID, endpoint string, p
 func (s *StatusStore) MarkRunning(ctx context.Context, taskID string) error {
 	now := time.Now().Unix()
 	key := s.key(taskID)
-	if err := s.rdb.HSet(ctx, key,
+	pipe := s.rdb.Pipeline()
+	pipe.HSet(ctx, key,
 		"status", TaskStatusRunning,
 		"started_at", strconv.FormatInt(now, 10),
 		"updated_at", strconv.FormatInt(now, 10),
-	).Err(); err != nil {
+	)
+	pipe.Expire(ctx, key, RunningStatusTTL*time.Second)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return err
 	}
-	return s.rdb.Expire(ctx, key, RunningStatusTTL*time.Second).Err()
+	s.publishTaskEvent(ctx, taskID)
+	return nil
 }
 
 func (s *StatusStore) MarkSuccess(ctx context.Context, taskID string, result any) error {
@@ -123,44 +127,56 @@ func (s *StatusStore) MarkSuccess(ctx context.Context, taskID string, result any
 	}
 	now := time.Now().Unix()
 	key := s.key(taskID)
-	if err := s.rdb.HSet(ctx, key,
+	pipe := s.rdb.Pipeline()
+	pipe.HSet(ctx, key,
 		"status", TaskStatusSuccess,
 		"progress", "100",
 		"result", resultStr,
 		"finished_at", strconv.FormatInt(now, 10),
 		"updated_at", strconv.FormatInt(now, 10),
-	).Err(); err != nil {
+	)
+	pipe.Expire(ctx, key, FinalStatusTTL*time.Second)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return err
 	}
-	return s.rdb.Expire(ctx, key, FinalStatusTTL*time.Second).Err()
+	s.publishTaskEvent(ctx, taskID)
+	return nil
 }
 
 func (s *StatusStore) MarkFailed(ctx context.Context, taskID, errMsg string) error {
 	now := time.Now().Unix()
 	key := s.key(taskID)
-	if err := s.rdb.HSet(ctx, key,
+	pipe := s.rdb.Pipeline()
+	pipe.HSet(ctx, key,
 		"status", TaskStatusFailed,
 		"error", errMsg,
 		"finished_at", strconv.FormatInt(now, 10),
 		"updated_at", strconv.FormatInt(now, 10),
-	).Err(); err != nil {
+	)
+	pipe.Expire(ctx, key, FinalStatusTTL*time.Second)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return err
 	}
-	return s.rdb.Expire(ctx, key, FinalStatusTTL*time.Second).Err()
+	s.publishTaskEvent(ctx, taskID)
+	return nil
 }
 
 func (s *StatusStore) MarkCancelled(ctx context.Context, taskID, reason string) error {
 	now := time.Now().Unix()
 	key := s.key(taskID)
-	if err := s.rdb.HSet(ctx, key,
+	pipe := s.rdb.Pipeline()
+	pipe.HSet(ctx, key,
 		"status", TaskStatusCancelled,
 		"message", reason,
 		"finished_at", strconv.FormatInt(now, 10),
 		"updated_at", strconv.FormatInt(now, 10),
-	).Err(); err != nil {
+	)
+	pipe.Expire(ctx, key, FinalStatusTTL*time.Second)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return err
 	}
-	return s.rdb.Expire(ctx, key, FinalStatusTTL*time.Second).Err()
+	s.publishTaskEvent(ctx, taskID)
+	return nil
 }
 
 // CancelIfQueued atomically transitions from "queued" to "cancelled".
@@ -179,23 +195,30 @@ func (s *StatusStore) CancelIfQueued(ctx context.Context, taskID, reason string)
 	if err != nil {
 		return false, err
 	}
+	if res == 1 {
+		s.publishTaskEvent(ctx, taskID)
+	}
 	return res == 1, nil
 }
 
 func (s *StatusStore) MarkQueuedForRetry(ctx context.Context, taskID, message, errMsg string) error {
 	now := time.Now().Unix()
 	key := s.key(taskID)
-	if err := s.rdb.HSet(ctx, key,
+	pipe := s.rdb.Pipeline()
+	pipe.HSet(ctx, key,
 		"status", TaskStatusQueued,
 		"message", message,
 		"error", errMsg,
 		"started_at", "-",
 		"finished_at", "-",
 		"updated_at", strconv.FormatInt(now, 10),
-	).Err(); err != nil {
+	)
+	pipe.Expire(ctx, key, RunningStatusTTL*time.Second)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return err
 	}
-	return s.rdb.Expire(ctx, key, RunningStatusTTL*time.Second).Err()
+	s.publishTaskEvent(ctx, taskID)
+	return nil
 }
 
 func (s *StatusStore) UpdateProgress(ctx context.Context, taskID string, progress int, message string) error {
@@ -208,10 +231,20 @@ func (s *StatusStore) UpdateProgress(ctx context.Context, taskID string, progres
 	if message != "" {
 		fields = append(fields, "message", message)
 	}
-	if err := s.rdb.HSet(ctx, key, fields...).Err(); err != nil {
+	pipe := s.rdb.Pipeline()
+	pipe.HSet(ctx, key, fields...)
+	pipe.Expire(ctx, key, RunningStatusTTL*time.Second)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return err
 	}
-	return s.rdb.Expire(ctx, key, RunningStatusTTL*time.Second).Err()
+	s.publishTaskEvent(ctx, taskID)
+	return nil
+}
+
+// Delete removes the status record for a task. Used by Producer to clean up
+// when enqueue fails after InitQueued has already written the status.
+func (s *StatusStore) Delete(ctx context.Context, taskID string) error {
+	return s.rdb.Del(ctx, s.key(taskID)).Err()
 }
 
 func (s *StatusStore) Get(ctx context.Context, taskID string) (*TaskStatus, error) {
@@ -255,31 +288,55 @@ func deserializeStatus(raw map[string]string) *TaskStatus {
 	return ts
 }
 
-// PublishTaskEvent 向 Pub/Sub 频道发布任务状态变更事件（供 SSE 推送）
+// PublishTaskEvent serializes a TaskStatus snapshot and publishes it to the
+// task-events Pub/Sub channel. The "result" field is emitted as a raw JSON
+// value (not a JSON-encoded string) so SSE subscribers can parse it directly.
 func (s *StatusStore) PublishTaskEvent(ctx context.Context, taskID string, status *TaskStatus) error {
-	b, err := json.Marshal(map[string]any{
-		"task_id":            taskID,
-		"status":             status.Status,
-		"progress":           status.Progress,
-		"error":              status.Error,
-		"message":            status.Message,
-		"result":             status.Result,
-		"created_at":         status.CreatedAt,
-		"started_at":         status.StartedAt,
-		"finished_at":        status.FinishedAt,
-		"endpoint":           status.Endpoint,
-		"priority":           status.Priority,
-		"supports_progress":  status.SupportsProgress,
-	})
+	b, err := json.Marshal(taskStatusToEvent(taskID, status))
 	if err != nil {
 		return err
 	}
 	return s.rdb.Publish(ctx, buildTaskEventsChannel(s.namespace), string(b)).Err()
 }
 
+// publishTaskEvent reads the latest status and publishes it. Errors are
+// swallowed because event publication is best-effort — the authoritative
+// state lives in the Redis hash, not in the pub/sub channel.
 func (s *StatusStore) publishTaskEvent(ctx context.Context, taskID string) {
-	// Get the updated status and publish
-	if ts, err := s.Get(ctx, taskID); err == nil && ts != nil {
-		s.PublishTaskEvent(ctx, taskID, ts)
+	ts, err := s.Get(ctx, taskID)
+	if err != nil || ts == nil {
+		return
 	}
+	_ = s.PublishTaskEvent(ctx, taskID, ts)
+}
+
+// taskStatusToEvent builds the SSE/pubsub event payload for a task. Callers
+// (publish + producer's initial-status SSE write) share this so the schema
+// stays consistent.
+func taskStatusToEvent(taskID string, status *TaskStatus) map[string]any {
+	return map[string]any{
+		"task_id":           taskID,
+		"status":            status.Status,
+		"progress":          status.Progress,
+		"error":             status.Error,
+		"message":           status.Message,
+		"result":            decodeResult(status.Result),
+		"created_at":        status.CreatedAt,
+		"started_at":        status.StartedAt,
+		"finished_at":       status.FinishedAt,
+		"endpoint":          status.Endpoint,
+		"priority":          status.Priority,
+		"supports_progress": status.SupportsProgress,
+	}
+}
+
+// decodeResult converts the stringified JSON result back to a raw JSON value
+// so it serializes inline (not as a quoted string) when the event is marshalled.
+// Falls back to the original string if parsing fails — handlers that returned
+// non-JSON-serializable values would otherwise lose data.
+func decodeResult(result string) any {
+	if result == "" {
+		return nil
+	}
+	return json.RawMessage(result)
 }

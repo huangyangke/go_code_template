@@ -95,7 +95,8 @@ func (m *Manager) verifyState(state, expectedProvider string) error {
 		return fmt.Errorf("auth: invalid state format")
 	}
 	encoded, sig := state[:dot], state[dot+1:]
-	if m.signState(encoded) != sig {
+	// Constant-time comparison to prevent timing attacks.
+	if !hmac.Equal([]byte(m.signState(encoded)), []byte(sig)) {
 		return fmt.Errorf("auth: state signature mismatch")
 	}
 

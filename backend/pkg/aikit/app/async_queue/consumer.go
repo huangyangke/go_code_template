@@ -49,6 +49,7 @@ type Consumer struct {
 	pendingOrder      []string                      // endpoint 轮询顺序
 	taskCancelFuncs   map[string]context.CancelFunc // task_id → cancel
 	forcedRecoveryAt  time.Time
+	wg                sync.WaitGroup // tracks in-flight handler goroutines for Stop drain
 }
 
 // ConsumerOption 函数式选项
@@ -99,6 +100,11 @@ func NewConsumer(
 	for _, opt := range opts {
 		opt(c)
 	}
+	// Guard against WithScheduler(SchedulerConfig{}) leaving WorkerCapacity at 0,
+	// which would make semaphore.Acquire block forever.
+	if c.scheduler.WorkerCapacity <= 0 {
+		c.scheduler.WorkerCapacity = DefaultWorkerCapacity
+	}
 	c.sem = semaphore.NewWeighted(int64(c.scheduler.WorkerCapacity))
 	return c
 }
@@ -137,7 +143,9 @@ func (c *Consumer) Start(ctx context.Context) error {
 	return c.loop(ctx, consumerName)
 }
 
-// Stop 优雅停止
+// Stop signals the consumer loop to exit and waits for in-flight handlers
+// to finish (or for their context-cancellation to propagate). Bounded by
+// DefaultStopTimeout so a stuck handler can't block shutdown forever.
 func (c *Consumer) Stop() {
 	c.mu.Lock()
 	c.running = false
@@ -145,6 +153,17 @@ func (c *Consumer) Stop() {
 		c.cancel()
 	}
 	c.mu.Unlock()
+
+	drained := make(chan struct{})
+	go func() {
+		c.wg.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(DefaultStopTimeout):
+		log.Warn("[Consumer][stop][drain_timeout][consumer=%s][group=%s]", c.consumerName, c.groupName)
+	}
 	log.Info("[Consumer][stop][consumer=%s][group=%s][stream=%s]", c.consumerName, c.groupName, c.cfg.StreamKey)
 }
 
@@ -234,7 +253,7 @@ func (c *Consumer) loop(ctx context.Context, consumerName string) error {
 				c.mu.Lock()
 				c.activeMsgIDs[msg.ID] = struct{}{}
 				c.mu.Unlock()
-				go c.admitMessage(ctx, msg.ID, toStringMap(msg.Values))
+				c.spawnAdmit(ctx, msg.ID, toStringMap(msg.Values))
 			}
 		}
 	}
@@ -243,6 +262,24 @@ func (c *Consumer) loop(ctx context.Context, consumerName string) error {
 // ================================
 // 消息调度
 // ================================
+
+// spawnAdmit launches admitMessage in a tracked goroutine so Stop() can drain it.
+func (c *Consumer) spawnAdmit(ctx context.Context, msgID string, data map[string]any) {
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.admitMessage(ctx, msgID, data)
+	}()
+}
+
+// spawnHandleTask launches handleTask in a tracked goroutine so Stop() can drain it.
+func (c *Consumer) spawnHandleTask(ctx context.Context, msgID string, data map[string]any) {
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.handleTask(ctx, msgID, data)
+	}()
+}
 
 func (c *Consumer) admitMessage(ctx context.Context, msgID string, data map[string]interface{}) {
 	endpoint, _ := data["endpoint"].(string)
@@ -267,7 +304,7 @@ func (c *Consumer) admitMessage(ctx context.Context, msgID string, data map[stri
 		return
 	}
 
-	go c.handleTask(ctx, msgID, data)
+	c.spawnHandleTask(ctx, msgID, data)
 }
 
 func (c *Consumer) drainPending(ctx context.Context) int {
@@ -304,7 +341,7 @@ func (c *Consumer) drainPending(ctx context.Context) int {
 			} else {
 				delete(c.pendingByEndpoint, endpoint)
 			}
-			go c.handleTask(ctx, msgID, data)
+			c.spawnHandleTask(ctx, msgID, data)
 			scheduled++
 		} else {
 			newOrder = append(newOrder, endpoint)
@@ -594,7 +631,7 @@ func (c *Consumer) recoverPending(ctx context.Context, consumerName string) erro
 					c.mu.Lock()
 					c.activeMsgIDs[msg.ID] = struct{}{}
 					c.mu.Unlock()
-					go c.admitMessage(ctx, msg.ID, toStringMap(msg.Values))
+					c.spawnAdmit(ctx, msg.ID, toStringMap(msg.Values))
 					claimedCount++
 				}
 			} else {

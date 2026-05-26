@@ -10,7 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 func setupTestContext() (*gin.Context, *httptest.ResponseRecorder) {
@@ -97,15 +96,3 @@ func TestJSONErr_GeneralError(t *testing.T) {
 	assert.Equal(t, "服务器内部错误", resp.Msg)
 }
 
-func TestJSONErr_RecordNotFound(t *testing.T) {
-	c, w := setupTestContext()
-
-	JSONErr(c, nil, gorm.ErrRecordNotFound)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
-
-	var resp ApiResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, CodeNotFound, resp.Code)
-	assert.Equal(t, "记录不存在", resp.Msg)
-}

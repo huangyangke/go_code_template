@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -99,18 +100,34 @@ func NewFromService(svc UserService, cfg Config) (*Manager, error) {
 	hasher := BcryptHasher{}
 
 	if cfg.Authenticate == nil {
+		// dummyHash is a valid bcrypt hash used to mask timing differences
+		// between "user not found" and "wrong password" to prevent user enumeration attacks.
+		// This is a hash of a random string and will never match any user password.
+		dummyHash := "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+
 		cfg.Authenticate = func(ctx context.Context, username, password string) (*AuthResult, error) {
 			user, err := svc.GetUserByUsername(ctx, username)
-			if err != nil {
-				if errors.Is(err, ErrUserNotFound) {
-					return nil, nil
-				}
+
+			var userHash string
+			switch {
+			case err != nil && !errors.Is(err, ErrUserNotFound):
 				return nil, err
+			case err != nil:
+				// ErrUserNotFound - use dummy hash to mask timing
+				userHash = dummyHash
+			case user == nil:
+				userHash = dummyHash
+			default:
+				userHash = user.GetPasswordHash()
 			}
-			if user == nil {
+
+			// Always perform bcrypt to mask user existence
+			if !hasher.Verify(password, userHash) {
 				return nil, nil
 			}
-			if !hasher.Verify(password, user.GetPasswordHash()) {
+
+			// If we used dummy hash, this is actually user-not-found
+			if user == nil || errors.Is(err, ErrUserNotFound) {
 				return nil, nil
 			}
 			var tokenVersion int64
@@ -288,7 +305,9 @@ func (m *Manager) AuthRequired() gin.HandlerFunc {
 		}
 
 		// Check token version (matches Python behavior: version check on every verification)
-		if m.cfg.GetTokenVersion != nil && claims.Ver > 0 {
+		// Note: Always check when GetTokenVersion is configured, even for version=0,
+		// to prevent bypass attacks on freshly-issued tokens.
+		if m.cfg.GetTokenVersion != nil {
 			ver, err := m.cfg.GetTokenVersion(c.Request.Context(), claims.UID)
 			if err != nil {
 				response.Unauthorized(c)
@@ -461,8 +480,12 @@ func (m *Manager) handleRefresh(c *gin.Context) {
 	}
 
 	// Revoke old refresh token before issuing new one (rotation).
+	// Critical: If revocation fails, abort to prevent token reuse attacks.
 	if m.cfg.RefreshRotation && m.cfg.RevokeToken != nil {
-		_ = m.cfg.RevokeToken(c.Request.Context(), revocationKey(claims, tokenStr))
+		if err := m.cfg.RevokeToken(c.Request.Context(), revocationKey(claims, tokenStr)); err != nil {
+			response.Unauthorized(c)
+			return
+		}
 	}
 
 	result := &AuthResult{
@@ -563,5 +586,7 @@ func fetchJSON(client *http.Client, url string, dest any) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("upstream returned %d", resp.StatusCode)
 	}
-	return json.NewDecoder(resp.Body).Decode(dest)
+	// Limit body size to 1MB to prevent DoS from malicious OAuth providers
+	const maxBodySize = 1 << 20 // 1MB
+	return json.NewDecoder(io.LimitReader(resp.Body, maxBodySize)).Decode(dest)
 }

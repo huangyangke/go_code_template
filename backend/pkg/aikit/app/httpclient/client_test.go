@@ -1,7 +1,9 @@
 package httpclient
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,10 +38,11 @@ func TestClient_Get(t *testing.T) {
 	defer srv.Close()
 
 	c := New(Config{
-		Name:   "test",
-		Addr:   srv.URL,
-		Retry:  &RetryConfig{MaxRetries: 0}, // disable retry for test
-	}, WithDisableMetrics())
+		Name:           "test",
+		Addr:           srv.URL,
+		Retry:          &RetryConfig{MaxRetries: 0}, // disable retry for test
+		DisableMetrics: true,
+	})
 
 	resp, err := c.Get(context.Background(), "/hello")
 	if err != nil {
@@ -48,6 +51,42 @@ func TestClient_Get(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestClient_PostWithBody_Retry(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		body, _ := io.ReadAll(r.Body)
+		if string(body) != "test-data" {
+			t.Errorf("attempt %d: expected body 'test-data', got '%s'", callCount, string(body))
+		}
+		if callCount < 2 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := New(Config{
+		Name:           "test",
+		Addr:           srv.URL,
+		Retry:          &RetryConfig{MaxRetries: 3, WaitBetween: 10 * time.Millisecond},
+		DisableMetrics: true,
+	})
+
+	resp, err := c.Post(context.Background(), "/data", "text/plain", bytes.NewReader([]byte("test-data")))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	if callCount < 2 {
+		t.Errorf("expected at least 2 attempts, got %d", callCount)
 	}
 }
 
@@ -64,10 +103,11 @@ func TestClient_Post(t *testing.T) {
 	defer srv.Close()
 
 	c := New(Config{
-		Name:  "test",
-		Addr:  srv.URL,
-		Retry: &RetryConfig{MaxRetries: 0},
-	}, WithDisableMetrics())
+		Name:           "test",
+		Addr:           srv.URL,
+		Retry:          &RetryConfig{MaxRetries: 0},
+		DisableMetrics: true,
+	})
 
 	resp, err := c.Post(context.Background(), "/data", "application/json", nil)
 	if err != nil {
@@ -88,10 +128,11 @@ func TestClient_AutoFillAddr(t *testing.T) {
 	defer srv.Close()
 
 	c := New(Config{
-		Name:  "test",
-		Addr:  srv.URL,
-		Retry: &RetryConfig{MaxRetries: 0},
-	}, WithDisableMetrics())
+		Name:           "test",
+		Addr:           srv.URL,
+		Retry:          &RetryConfig{MaxRetries: 0},
+		DisableMetrics: true,
+	})
 
 	resp, err := c.Get(context.Background(), "/api/hello")
 	if err != nil {
@@ -103,7 +144,3 @@ func TestClient_AutoFillAddr(t *testing.T) {
 	}
 }
 
-// WithDisableMetrics disables metrics for test clients.
-func WithDisableMetrics() Option {
-	return func(c *Client) {}
-}

@@ -29,13 +29,64 @@ func TestHealthChecker_Unhealthy(t *testing.T) {
 func TestHealthStatus_Structure(t *testing.T) {
 	status := &HealthStatus{
 		Services: map[string]*ServiceHealth{
-			"mysql:main":  {Status: "healthy"},
-			"redis:cache": {Status: "unhealthy", Error: "timeout"},
+			"mysql:main":  {Status: StatusHealthy},
+			"redis:cache": {Status: StatusUnhealthy, Error: "timeout"},
 		},
 	}
-	status.Status = "unhealthy"
+	status.Status = StatusUnhealthy
 
-	assert.Equal(t, "unhealthy", status.Status)
-	assert.Equal(t, "healthy", status.Services["mysql:main"].Status)
+	assert.Equal(t, StatusUnhealthy, status.Status)
+	assert.Equal(t, StatusHealthy, status.Services["mysql:main"].Status)
 	assert.Equal(t, "timeout", status.Services["redis:cache"].Error)
+}
+
+func TestHealthStatus_IsHealthy(t *testing.T) {
+	tests := []struct {
+		name   string
+		status *HealthStatus
+		want   bool
+	}{
+		{
+			name: "all healthy",
+			status: &HealthStatus{
+				Status:   StatusHealthy,
+				Services: map[string]*ServiceHealth{
+					"mysql:main":  {Status: StatusHealthy},
+					"redis:cache": {Status: StatusHealthy},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "one unhealthy",
+			status: &HealthStatus{
+				Status: StatusUnhealthy,
+				Services: map[string]*ServiceHealth{
+					"mysql:main":  {Status: StatusHealthy},
+					"redis:cache": {Status: StatusUnhealthy, Error: "timeout"},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "no services",
+			status: &HealthStatus{
+				Status:   StatusHealthy,
+				Services: map[string]*ServiceHealth{},
+			},
+			want: true,
+		},
+		{
+			name:   "nil services",
+			status: &HealthStatus{Status: StatusHealthy},
+			want:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.status.IsHealthy()
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

@@ -34,10 +34,8 @@ func New(cfg Config, opts ...Option) *Client {
 	c := &Client{
 		name:     cfg.Name,
 		baseAddr: strings.TrimRight(cfg.Addr, "/"),
-		std: &http.Client{
-			Timeout: cfg.Timeout,
-		},
-		timeout: cfg.Timeout,
+		std:      &http.Client{},
+		timeout:  cfg.Timeout,
 	}
 
 	for _, opt := range opts {
@@ -157,7 +155,7 @@ func (c *Client) Post(ctx context.Context, target, contentType string, body io.R
 }
 
 // Put sends a PUT request.
-func (c *Client) Put(ctx context.Context, target, contentType string, body io.Reader) (*http.Response, error) {
+func (c *Client) Put(ctx context.Context, target, contentType string, body io.Reader, headers ...http.Header) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, target, body)
 	if err != nil {
 		return nil, err
@@ -165,14 +163,28 @@ func (c *Client) Put(ctx context.Context, target, contentType string, body io.Re
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
+	if len(headers) > 0 {
+		for k, vs := range headers[0] {
+			for _, v := range vs {
+				req.Header.Add(k, v)
+			}
+		}
+	}
 	return c.Do(ctx, req)
 }
 
 // Delete sends a DELETE request.
-func (c *Client) Delete(ctx context.Context, target string) (*http.Response, error) {
+func (c *Client) Delete(ctx context.Context, target string, headers ...http.Header) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, target, nil)
 	if err != nil {
 		return nil, err
+	}
+	if len(headers) > 0 {
+		for k, vs := range headers[0] {
+			for _, v := range vs {
+				req.Header.Add(k, v)
+			}
+		}
 	}
 	return c.Do(ctx, req)
 }

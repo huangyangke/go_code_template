@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/example/go-template/pkg/aikit/resilience"
@@ -28,6 +29,15 @@ func RetryMiddleware(cfg RetryConfig) Middleware {
 					_ = resp.Response.Body.Close()
 				}
 
+				// Reset request body for retry (POST/PUT with body)
+				if attempt > 0 && req.GetBody != nil {
+					body, err := req.GetBody()
+					if err != nil {
+						return resp, fmt.Errorf("httpclient: failed to reset request body: %w", err)
+					}
+					req.Body = body
+				}
+
 				resp, lastErr = next(ctx, req)
 
 				// Success: no error and status < 500
@@ -45,8 +55,16 @@ func RetryMiddleware(cfg RetryConfig) Middleware {
 					break
 				}
 
-				// Wait before next retry
-				time.Sleep(backoff.Delay(attempt))
+				// Wait before next retry (context-aware)
+				delay := backoff.Delay(attempt)
+				timer := time.NewTimer(delay)
+				select {
+				case <-timer.C:
+					// Continue to next attempt
+				case <-ctx.Done():
+					timer.Stop()
+					return resp, ctx.Err()
+				}
 			}
 
 			return resp, lastErr

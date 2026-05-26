@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 const (
@@ -57,7 +56,7 @@ type bizError interface {
 
 // JSONErr sends a response determined by err.
 // If err is nil, returns 200 with success.
-// Priority: bizError → gorm.ErrRecordNotFound → generic 500.
+// Priority: bizError → generic 500.
 func JSONErr(c *gin.Context, data any, err error) {
 	if err == nil {
 		JSON(c, data, "")
@@ -69,17 +68,7 @@ func JSONErr(c *gin.Context, data any, err error) {
 		c.JSON(biz.BizHTTPStatus(), ApiResponse{
 			Code:   biz.BizCode(),
 			Msg:    biz.Error(),
-			Data:   []any{},
-			TaskID: getTaskID(c),
-		})
-		return
-	}
-
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		c.JSON(http.StatusNotFound, ApiResponse{
-			Code:   CodeNotFound,
-			Msg:    "记录不存在",
-			Data:   []any{},
+			Data:   data,
 			TaskID: getTaskID(c),
 		})
 		return
@@ -88,7 +77,7 @@ func JSONErr(c *gin.Context, data any, err error) {
 	c.JSON(http.StatusInternalServerError, ApiResponse{
 		Code:   CodeInternalError,
 		Msg:    "服务器内部错误",
-		Data:   []any{},
+		Data:   data,
 		TaskID: getTaskID(c),
 	})
 }

@@ -2,7 +2,9 @@ package xjob
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -71,7 +73,9 @@ func Info(logID int64, format string, args ...interface{}) {
 	if defaultLogHandler == nil {
 		return
 	}
-	defaultLogHandler.writeLog(logID, fmt.Sprintf(format, args...))
+	if err := defaultLogHandler.writeLog(logID, fmt.Sprintf(format, args...)); err != nil {
+		log.Error("[XxlJob][writeLog_error]: %v", err)
+	}
 }
 
 var defaultLogHandler *LogHandler
@@ -108,20 +112,24 @@ func (h *LogHandler) readLog(logPath string, fromLineNum int) (toLineNum int, co
 	}
 	defer f.Close()
 
-	var lines []string
-	scanner := bufio.NewScanner(f)
+	var buf bytes.Buffer
+	reader := bufio.NewReader(f)
 	lineNum := 0
-	for scanner.Scan() {
+	for {
+		line, err := reader.ReadString('\n')
 		lineNum++
 		if lineNum >= fromLineNum {
-			lines = append(lines, scanner.Text())
+			buf.WriteString(line)
+		}
+		if err != nil {
+			if err != io.EOF {
+				log.Warn("[XxlJob][readLog][error]: %v", err)
+			}
+			break
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		log.Warn("[XxlJob][readLog][error]: %v", err)
-	}
 
-	return lineNum + 1, strings.Join(lines, "\n")
+	return lineNum + 1, strings.TrimRight(buf.String(), "\n")
 }
 
 // getLogPath returns the log file path for a given time and log ID.
@@ -132,6 +140,8 @@ func (h *LogHandler) getLogPath(t time.Time, logID int64) string {
 
 // startCleanupLoop periodically removes old log directories.
 func (h *LogHandler) startCleanupLoop() {
+	h.cleanup() // run once on startup
+
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 

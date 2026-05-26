@@ -21,12 +21,12 @@ import (
 	"github.com/example/go-template/pkg/aikit/app/health"
 	"github.com/example/go-template/pkg/aikit/app/httpclient"
 	"github.com/example/go-template/pkg/aikit/app/middleware"
+	"github.com/example/go-template/pkg/aikit/app/xjob"
 	"github.com/example/go-template/pkg/aikit/cache"
 	"github.com/example/go-template/pkg/aikit/config"
 	dbmysql "github.com/example/go-template/pkg/aikit/database/mysql"
 	dbpulsar "github.com/example/go-template/pkg/aikit/database/pulsar"
 	dbredis "github.com/example/go-template/pkg/aikit/database/redis"
-	"github.com/example/go-template/pkg/aikit/app/xjob"
 	"github.com/example/go-template/pkg/aikit/log"
 	"github.com/example/go-template/pkg/aikit/metrics"
 
@@ -39,6 +39,14 @@ type FastAppConfig struct {
 	Host   string
 	Port   int
 	Mode   string // "debug" | "release" | "test"
+}
+
+// ServerConfig holds HTTP server tuning parameters
+type ServerConfig struct {
+	ReadTimeout     time.Duration // default 30s
+	WriteTimeout    time.Duration // default 30s
+	IdleTimeout     time.Duration // default 120s
+	ShutdownTimeout time.Duration // default 30s
 }
 
 // MiddlewareConfig controls which built-in middlewares to enable
@@ -81,6 +89,7 @@ type XxlJobConfig struct {
 	LogDir       string
 	MaxAge       int
 	JobDisabled  bool
+	Extra        map[string]string
 }
 
 // FastApp provides one-stop application orchestration:
@@ -93,6 +102,9 @@ type FastApp struct {
 	cfg    FastAppConfig
 	engine *gin.Engine
 	server *http.Server
+
+	// server config
+	svrCfg ServerConfig
 
 	// middleware config
 	mwCfg MiddlewareConfig
@@ -109,11 +121,11 @@ type FastApp struct {
 	configLoader *config.ConfigLoader
 
 	// resources
-	redisInstances    map[string]*dbredis.Redis
-	mysqlInstances    map[string]*dbmysql.Database
-	cacheInstances    map[string]*cache.MultiLevelCache
+	redisInstances      map[string]*dbredis.Redis
+	mysqlInstances      map[string]*dbmysql.Database
+	cacheInstances      map[string]*cache.MultiLevelCache
 	httpClientInstances map[string]*httpclient.Client
-	pulsarInstances   map[string]*dbpulsar.Client
+	pulsarInstances     map[string]*dbpulsar.Client
 
 	// xxl-job
 	xjobConfig   *XxlJobConfig
@@ -143,13 +155,13 @@ func NewFastApp(cfg FastAppConfig) *FastApp {
 	gin.SetMode(cfg.Mode)
 
 	return &FastApp{
-		cfg:                cfg,
-		engine:             gin.New(),
-		redisInstances:     make(map[string]*dbredis.Redis),
-		mysqlInstances:     make(map[string]*dbmysql.Database),
-		cacheInstances:     make(map[string]*cache.MultiLevelCache),
+		cfg:                 cfg,
+		engine:              gin.New(),
+		redisInstances:      make(map[string]*dbredis.Redis),
+		mysqlInstances:      make(map[string]*dbmysql.Database),
+		cacheInstances:      make(map[string]*cache.MultiLevelCache),
 		httpClientInstances: make(map[string]*httpclient.Client),
-		pulsarInstances:    make(map[string]*dbpulsar.Client),
+		pulsarInstances:     make(map[string]*dbpulsar.Client),
 	}
 }
 
@@ -162,6 +174,28 @@ func (a *FastApp) Engine() *gin.Engine {
 // Called after built-in endpoints and middleware are set up.
 func (a *FastApp) SetRouteRegistrar(fn func(r *gin.Engine)) {
 	a.routeRegistrar = fn
+}
+
+// SetServer configures HTTP server tuning parameters (timeouts, etc.)
+func (a *FastApp) SetServer(cfg ServerConfig) {
+	a.svrCfg = cfg
+}
+
+// applyServerDefaults fills zero-value timeouts with sensible defaults.
+// Idempotent: safe to call multiple times.
+func (a *FastApp) applyServerDefaults() {
+	if a.svrCfg.ReadTimeout == 0 {
+		a.svrCfg.ReadTimeout = 30 * time.Second
+	}
+	if a.svrCfg.WriteTimeout == 0 {
+		a.svrCfg.WriteTimeout = 30 * time.Second
+	}
+	if a.svrCfg.IdleTimeout == 0 {
+		a.svrCfg.IdleTimeout = 120 * time.Second
+	}
+	if a.svrCfg.ShutdownTimeout == 0 {
+		a.svrCfg.ShutdownTimeout = 30 * time.Second
+	}
 }
 
 // SetMiddlewares configures the built-in middleware suite
@@ -248,7 +282,8 @@ func (a *FastApp) GetMySQL(name string) *dbmysql.Database {
 // RegisterCache registers a named Cache instance.
 // If a Redis instance with the same name was previously registered via RegisterRedis,
 // it is automatically reused as the remote cache backend.
-func (a *FastApp) RegisterCache(name string, cfg cache.Config) (*cache.MultiLevelCache, error) {
+// Panics on invalid configuration (programming error).
+func (a *FastApp) RegisterCache(name string, cfg cache.Config) *cache.MultiLevelCache {
 	if cfg.Family == "" {
 		cfg.Family = a.cfg.Family
 	}
@@ -262,10 +297,10 @@ func (a *FastApp) RegisterCache(name string, cfg cache.Config) (*cache.MultiLeve
 	}
 	c, err := cache.New(cfg)
 	if err != nil {
-		return nil, err
+		panic(fmt.Sprintf("cache %q config error: %v", name, err))
 	}
 	a.cacheInstances[name] = c
-	return c, nil
+	return c
 }
 
 // GetCache returns a named Cache instance
@@ -362,16 +397,13 @@ func (a *FastApp) healthCheckHandler() gin.HandlerFunc {
 			Services: make(map[string]*health.ServiceHealth),
 		}
 
-		allHealthy := true
-
 		for name, db := range a.mysqlInstances {
 			h := &health.ServiceHealth{}
 			if err := db.Ping(ctx); err != nil {
-				h.Status = "unhealthy"
+				h.Status = health.StatusUnhealthy
 				h.Error = err.Error()
-				allHealthy = false
 			} else {
-				h.Status = "healthy"
+				h.Status = health.StatusHealthy
 			}
 			status.Services["mysql:"+name] = h
 		}
@@ -379,20 +411,19 @@ func (a *FastApp) healthCheckHandler() gin.HandlerFunc {
 		for name, rdb := range a.redisInstances {
 			h := &health.ServiceHealth{}
 			if !rdb.Ping(ctx) {
-				h.Status = "unhealthy"
+				h.Status = health.StatusUnhealthy
 				h.Error = "redis ping failed"
-				allHealthy = false
 			} else {
-				h.Status = "healthy"
+				h.Status = health.StatusHealthy
 			}
 			status.Services["redis:"+name] = h
 		}
 
-		if allHealthy {
-			status.Status = "healthy"
+		if status.IsHealthy() {
+			status.Status = health.StatusHealthy
 			c.JSON(http.StatusOK, status)
 		} else {
-			status.Status = "unhealthy"
+			status.Status = health.StatusUnhealthy
 			c.JSON(http.StatusServiceUnavailable, status)
 		}
 	}
@@ -470,6 +501,8 @@ func (a *FastApp) Run() error {
 		log.SetFamily(a.cfg.Family)
 	}
 
+	a.applyServerDefaults()
+
 	if a.mwCfg.EnablePrometheus {
 		metrics.Enable()
 	}
@@ -505,8 +538,11 @@ func (a *FastApp) Run() error {
 
 	// Create HTTP server
 	a.server = &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", a.cfg.Host, a.cfg.Port),
-		Handler: a.engine,
+		Addr:         fmt.Sprintf("%s:%d", a.cfg.Host, a.cfg.Port),
+		Handler:      a.engine,
+		ReadTimeout:  a.svrCfg.ReadTimeout,
+		WriteTimeout: a.svrCfg.WriteTimeout,
+		IdleTimeout:  a.svrCfg.IdleTimeout,
 	}
 
 	// Start async queue consumer
@@ -529,6 +565,7 @@ func (a *FastApp) Run() error {
 			LogDir:       a.xjobConfig.LogDir,
 			MaxAge:       a.xjobConfig.MaxAge,
 			JobDisabled:  a.xjobConfig.JobDisabled,
+			Extra:        a.xjobConfig.Extra,
 		}
 		executor, err := xjob.NewExecutor(&cfg)
 		if err != nil {
@@ -542,6 +579,7 @@ func (a *FastApp) Run() error {
 	ctx := context.Background()
 	for _, hook := range a.onStart {
 		if err := hook(ctx); err != nil {
+			_ = a.shutdown()
 			return fmt.Errorf("startup hook failed: %w", err)
 		}
 	}
@@ -555,23 +593,49 @@ func (a *FastApp) Run() error {
 		}
 	}()
 
-	// Wait for interrupt signal
+	// Discard SIGPIPE on its own channel so a closed downstream pipe (e.g. log
+	// forwarder hangup on stdout) doesn't terminate the process via Go's
+	// default SIGPIPE handler, and can never starve SIGTERM in a shared buffer.
+	sigpipe := make(chan os.Signal, 1)
+	signal.Notify(sigpipe, syscall.SIGPIPE)
+	defer signal.Stop(sigpipe)
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(quit)
 
-	select {
-	case err := <-errCh:
-		return fmt.Errorf("server error: %w", err)
-	case sig := <-quit:
-		log.Info("received signal %v, shutting down...", sig)
+	for {
+		select {
+		case <-sigpipe:
+			continue
+		case err := <-errCh:
+			_ = a.shutdown()
+			return fmt.Errorf("server error: %w", err)
+		case sig := <-quit:
+			log.Info("received signal %v, shutting down...", sig)
+			return a.shutdown()
+		}
 	}
-
-	return a.shutdown()
 }
 
 // shutdown performs graceful shutdown
 func (a *FastApp) shutdown() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Hard kill if graceful shutdown stalls (e.g. a hook blocks forever).
+	// The timer is cancelled on successful return so callers that hold the
+	// process alive after Run() (tests, embedded runners) are not killed.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-done:
+			return
+		case <-time.After(a.svrCfg.ShutdownTimeout + 5*time.Second):
+			log.Error("shutdown timeout exceeded, forcing exit")
+			os.Exit(1)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), a.svrCfg.ShutdownTimeout)
 	defer cancel()
 
 	// Stop async queue consumer
@@ -582,7 +646,9 @@ func (a *FastApp) shutdown() error {
 
 	// Run shutdown hooks
 	for _, hook := range a.onStop {
-		_ = hook(ctx)
+		if err := hook(ctx); err != nil {
+			log.Error("shutdown hook error: %v", err)
+		}
 	}
 
 	// Shutdown HTTP server
@@ -643,4 +709,49 @@ func (a *FastApp) printRoutes() {
 	for _, r := range routes {
 		log.Info("  %s %s", r.Method, r.Path)
 	}
+}
+
+// MustGetRedis returns a named Redis instance, panicking if not registered.
+func (a *FastApp) MustGetRedis(name string) *dbredis.Redis {
+	r := a.GetRedis(name)
+	if r == nil {
+		panic(fmt.Sprintf("redis %q not registered", name))
+	}
+	return r
+}
+
+// MustGetMySQL returns a named MySQL instance, panicking if not registered.
+func (a *FastApp) MustGetMySQL(name string) *dbmysql.Database {
+	db := a.GetMySQL(name)
+	if db == nil {
+		panic(fmt.Sprintf("mysql %q not registered", name))
+	}
+	return db
+}
+
+// MustGetCache returns a named Cache instance, panicking if not registered.
+func (a *FastApp) MustGetCache(name string) *cache.MultiLevelCache {
+	c := a.GetCache(name)
+	if c == nil {
+		panic(fmt.Sprintf("cache %q not registered", name))
+	}
+	return c
+}
+
+// MustGetHTTPClient returns a named HTTP client instance, panicking if not registered.
+func (a *FastApp) MustGetHTTPClient(name string) *httpclient.Client {
+	c := a.GetHTTPClient(name)
+	if c == nil {
+		panic(fmt.Sprintf("httpclient %q not registered", name))
+	}
+	return c
+}
+
+// MustGetPulsar returns a named Pulsar client instance, panicking if not registered.
+func (a *FastApp) MustGetPulsar(name string) *dbpulsar.Client {
+	c := a.GetPulsar(name)
+	if c == nil {
+		panic(fmt.Sprintf("pulsar %q not registered", name))
+	}
+	return c
 }

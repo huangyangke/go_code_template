@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -50,13 +51,12 @@ func TestFastApp_RegisterCache_GetCache(t *testing.T) {
 
 	assert.Nil(t, fa.GetCache("user-cache"))
 
-	c, err := fa.RegisterCache("user-cache", cache.Config{
-		Name:      "user-cache",
-		CacheType: cache.CacheTypeLocal,
-		LocalType: cache.LocalCacheTypeFreeCache,
+	c := fa.RegisterCache("user-cache", cache.Config{
+		Name:         "user-cache",
+		CacheType:    cache.CacheTypeLocal,
+		LocalType:    cache.LocalCacheTypeFreeCache,
 		LocalMemSize: "10mb",
 	})
-	require.NoError(t, err)
 	assert.NotNil(t, c)
 	assert.Equal(t, c, fa.GetCache("user-cache"))
 	assert.Nil(t, fa.GetCache("nonexistent"))
@@ -128,4 +128,37 @@ func TestFastApp_GetRedis_NilBeforeRegister(t *testing.T) {
 func TestFastApp_GetMySQL_NilBeforeRegister(t *testing.T) {
 	fa := NewFastApp(FastAppConfig{Family: "test"})
 	assert.Nil(t, fa.GetMySQL("main"))
+}
+
+func TestFastApp_SetServer_Defaults(t *testing.T) {
+	fa := NewFastApp(FastAppConfig{Family: "test"})
+	fa.applyServerDefaults()
+	assert.Equal(t, 30*time.Second, fa.svrCfg.ReadTimeout)
+	assert.Equal(t, 30*time.Second, fa.svrCfg.WriteTimeout)
+	assert.Equal(t, 120*time.Second, fa.svrCfg.IdleTimeout)
+	assert.Equal(t, 30*time.Second, fa.svrCfg.ShutdownTimeout)
+}
+
+func TestFastApp_SetServer_NoOverride(t *testing.T) {
+	fa := NewFastApp(FastAppConfig{Family: "test"})
+	fa.SetServer(ServerConfig{
+		ReadTimeout:     5 * time.Second,
+		WriteTimeout:    10 * time.Second,
+		IdleTimeout:     60 * time.Second,
+		ShutdownTimeout: 15 * time.Second,
+	})
+	fa.applyServerDefaults()
+	assert.Equal(t, 5*time.Second, fa.svrCfg.ReadTimeout)
+	assert.Equal(t, 10*time.Second, fa.svrCfg.WriteTimeout)
+	assert.Equal(t, 60*time.Second, fa.svrCfg.IdleTimeout)
+	assert.Equal(t, 15*time.Second, fa.svrCfg.ShutdownTimeout)
+}
+
+func TestFastApp_MustGet_Panics(t *testing.T) {
+	fa := NewFastApp(FastAppConfig{Family: "test"})
+	assert.PanicsWithValue(t, `redis "main" not registered`, func() { fa.MustGetRedis("main") })
+	assert.PanicsWithValue(t, `mysql "main" not registered`, func() { fa.MustGetMySQL("main") })
+	assert.PanicsWithValue(t, `cache "main" not registered`, func() { fa.MustGetCache("main") })
+	assert.PanicsWithValue(t, `httpclient "main" not registered`, func() { fa.MustGetHTTPClient("main") })
+	assert.PanicsWithValue(t, `pulsar "main" not registered`, func() { fa.MustGetPulsar("main") })
 }

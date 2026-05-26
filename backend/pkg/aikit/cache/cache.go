@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -36,8 +35,6 @@ type LocalCacheType string
 const (
 	LocalCacheTypeFreeCache LocalCacheType = "freecache" // Memory-bounded (e.g., 256MB)
 	LocalCacheTypeTinyLFU   LocalCacheType = "tinylfu"   // Item-count-bounded (e.g., 1024 entries)
-	LocalCacheTypeLRU       LocalCacheType = "lru"       // Backward compat: maps to TinyLFU
-	LocalCacheTypeTTL       LocalCacheType = "ttl"       // Backward compat: maps to FreeCache
 )
 
 // ErrCacheNotFound is returned when a cached "not found" placeholder is hit.
@@ -45,31 +42,23 @@ var ErrCacheNotFound = errors.New("cache: not found")
 
 // Config defines cache configuration
 type Config struct {
-	Family          string          `yaml:"family"`
-	Name            string          `yaml:"name"`
-	CacheType       CacheType       `yaml:"cache_type"`
-	LocalType       LocalCacheType  `yaml:"local_type"`
-	LocalMaxSize    int             `yaml:"local_max_size"` // LRU/TTL compat: max entries; TinyLFU: item count
-	LocalTTL        int             `yaml:"local_ttl"`      // seconds
-	RemoteTTL       int             `yaml:"remote_ttl"`     // seconds
-	RedisCmdable    redis.Cmdable   `yaml:"-"`              // Redis connection to use for remote cache
-	EnableRefresh   bool            `yaml:"enable_refresh"`   // Backward compat: maps to RefreshDuration > 0
-	RefreshInterval int             `yaml:"refresh_interval"` // Backward compat: maps to RefreshDuration
-	NullValueTTL    int             `yaml:"null_value_ttl"`   // seconds
-	TTLJitterMin    int             `yaml:"ttl_jitter_min"`   // Deprecated: jetcache-go handles jitter
-	TTLJitterMax    int             `yaml:"ttl_jitter_max"`   // Deprecated: jetcache-go handles jitter
-	EventChannel    string          `yaml:"event_channel"`
-
-	// New fields
-	LocalMemSize       string `yaml:"local_mem_size"`                 // FreeCache memory limit, e.g., "256MB"
-	LocalItemSize      int    `yaml:"local_item_size"`                // TinyLFU max items
-	RefreshDuration    int    `yaml:"refresh_duration"`               // seconds, async refresh interval (>0 enables)
-	StopRefreshAfter   int    `yaml:"stop_refresh_after_last_access"` // seconds, stop refresh after idle
-	RefreshConcurrency int    `yaml:"refresh_concurrency"`            // max concurrent refreshes
-	Codec              string `yaml:"codec"`                          // "msgpack"|"json"
-	SourceID           string `yaml:"-"`                              // auto-generated instance ID
-	SyncLocal          bool   `yaml:"sync_local"`                     // cross-instance L1 invalidation
-	EventChBufSize     int    `yaml:"event_ch_buf_size"`              // event channel buffer size
+	Family             string         `yaml:"family"`
+	Name               string         `yaml:"name"`
+	CacheType          CacheType      `yaml:"cache_type"`
+	LocalType          LocalCacheType `yaml:"local_type"`
+	LocalTTL           int            `yaml:"local_ttl"`                      // seconds
+	RemoteTTL          int            `yaml:"remote_ttl"`                     // seconds
+	NullValueTTL       int            `yaml:"null_value_ttl"`                 // seconds
+	RedisCmdable       redis.Cmdable  `yaml:"-"`
+	LocalMemSize       string         `yaml:"local_mem_size"`                 // FreeCache memory limit, e.g., "256MB"
+	LocalItemSize      int            `yaml:"local_item_size"`                // TinyLFU max items
+	RefreshDuration    int            `yaml:"refresh_duration"`               // seconds, async refresh interval (>0 enables)
+	StopRefreshAfter   int            `yaml:"stop_refresh_after_last_access"` // seconds, stop refresh after idle
+	RefreshConcurrency int            `yaml:"refresh_concurrency"`            // max concurrent refreshes
+	Codec              string         `yaml:"codec"`                          // "msgpack"|"json"
+	SourceID           string         `yaml:"-"`                              // auto-generated instance ID
+	SyncLocal          bool           `yaml:"sync_local"`                     // cross-instance L1 invalidation via jetcache-go
+	EventChBufSize     int            `yaml:"event_ch_buf_size"`              // SyncLocal event channel buffer size
 }
 
 // Global cache registry
@@ -80,14 +69,13 @@ var (
 
 // MultiLevelCache implements a multi-level cache (L1 local + L2 Redis) backed by jetcache-go.
 type MultiLevelCache struct {
-	config         Config
-	cache          jcache.Cache
-	redisCmdable   redis.Cmdable
-	pubsub         *redis.PubSub
-	stopCh         chan struct{}
-	closeOnce      sync.Once
-	localCache     *trackedLocal
-	unregTaskSize  func()
+	config        Config
+	cache         jcache.Cache
+	redisCmdable  redis.Cmdable
+	stopCh        chan struct{}
+	closeOnce     sync.Once
+	localCache    *trackedLocal
+	unregTaskSize func()
 }
 
 type trackedLocal struct {
@@ -135,17 +123,8 @@ func (c *Config) Fix() {
 	if c.CacheType == "" {
 		c.CacheType = CacheTypeBoth
 	}
-	// Map backward-compat local types
-	switch c.LocalType {
-	case LocalCacheTypeLRU:
-		c.LocalType = LocalCacheTypeTinyLFU
-	case LocalCacheTypeTTL:
+	if c.LocalType == "" {
 		c.LocalType = LocalCacheTypeFreeCache
-	case "":
-		c.LocalType = LocalCacheTypeFreeCache
-	}
-	if c.LocalMaxSize <= 0 {
-		c.LocalMaxSize = 1000
 	}
 	if c.LocalTTL <= 0 {
 		c.LocalTTL = 60
@@ -156,25 +135,14 @@ func (c *Config) Fix() {
 	if c.NullValueTTL <= 0 {
 		c.NullValueTTL = 60
 	}
-	// New field defaults
 	if c.LocalMemSize == "" {
 		c.LocalMemSize = "256MB"
 	}
 	if c.LocalItemSize <= 0 {
-		c.LocalItemSize = c.LocalMaxSize
+		c.LocalItemSize = 1000
 	}
 	if c.Codec == "" {
 		c.Codec = "msgpack"
-	}
-	// Backward compat: EnableRefresh/RefreshInterval -> RefreshDuration
-	if c.RefreshDuration <= 0 && c.RefreshInterval > 0 {
-		c.RefreshDuration = c.RefreshInterval
-	}
-	if c.EnableRefresh && c.RefreshDuration <= 0 {
-		c.RefreshDuration = c.LocalTTL / 2
-		if c.RefreshDuration < 1 {
-			c.RefreshDuration = 1
-		}
 	}
 	if c.RefreshConcurrency <= 0 {
 		c.RefreshConcurrency = 4
@@ -187,9 +155,6 @@ func (c *Config) Fix() {
 	}
 	if c.StopRefreshAfter <= 0 && c.RefreshDuration > 0 {
 		c.StopRefreshAfter = c.RefreshDuration + 1
-	}
-	if c.EventChannel == "" && c.Family != "" {
-		c.EventChannel = "aikit:cache:" + c.Family + ":" + c.Name + ":invalidate"
 	}
 }
 
@@ -212,11 +177,10 @@ func New(cfg Config) (*MultiLevelCache, error) {
 	}
 
 	m := &MultiLevelCache{
-		config:     cfg,
-		stopCh:     make(chan struct{}),
+		config: cfg,
+		stopCh: make(chan struct{}),
 	}
 
-	// Build jetcache-go options
 	opts := []jcache.Option{
 		jcache.WithName(cacheName(cfg.Family, cfg.Name)),
 		jcache.WithCodec(cfg.Codec),
@@ -239,7 +203,6 @@ func New(cfg Config) (*MultiLevelCache, error) {
 		))
 	}
 
-	// Create local cache backend.
 	// trackedLocal (key map) is only needed for CacheTypeLocal where Redis SCAN is unavailable
 	// to enumerate keys on Clear(). For CacheTypeBoth, Clear() uses Redis SCAN + DeleteFromLocalCache.
 	if cfg.CacheType == CacheTypeLocal {
@@ -249,7 +212,6 @@ func New(cfg Config) (*MultiLevelCache, error) {
 		opts = append(opts, jcache.WithLocal(m.newLocalCache()))
 	}
 
-	// Create remote cache backend (for remote or both mode)
 	if cfg.CacheType == CacheTypeRemote || cfg.CacheType == CacheTypeBoth {
 		if cfg.RedisCmdable != nil {
 			m.redisCmdable = cfg.RedisCmdable
@@ -259,17 +221,11 @@ func New(cfg Config) (*MultiLevelCache, error) {
 		}
 	}
 
-	// SyncLocal: cross-instance L1 invalidation via jetcache-go built-in mechanism.
 	if cfg.SyncLocal && cfg.CacheType == CacheTypeBoth {
 		opts = append(opts, jcache.WithSyncLocal(true))
 	}
 
 	m.cache = jcache.New(opts...)
-
-	// Legacy Pub/Sub invalidation (when SyncLocal is false but EventChannel is set)
-	if cfg.CacheType == CacheTypeBoth && !cfg.SyncLocal && cfg.EventChannel != "" && m.redisCmdable != nil {
-		go m.startEventSubscription()
-	}
 
 	log.Info("[Cache][%s/%s][created][type=%s][local=%s][codec=%s]",
 		cfg.Family, cfg.Name, cfg.CacheType, cfg.LocalType, cfg.Codec)
@@ -296,24 +252,9 @@ func (m *MultiLevelCache) newLocalCache() local.Local {
 			size, _ = ParseSize("256MB")
 		}
 		return local.NewFreeCache(size, localTTL)
-	case LocalCacheTypeTinyLFU:
-		return local.NewTinyLFU(m.config.LocalItemSize, localTTL)
 	default:
 		return local.NewTinyLFU(m.config.LocalItemSize, localTTL)
 	}
-}
-
-
-// subscribeRedis subscribes to a channel. redis.Cmdable does not include
-// Subscribe, so we type-assert to the concrete client types.
-func (m *MultiLevelCache) subscribeRedis(ctx context.Context, channel string) *redis.PubSub {
-	switch c := m.redisCmdable.(type) {
-	case *redis.Client:
-		return c.Subscribe(ctx, channel)
-	case *redis.ClusterClient:
-		return c.Subscribe(ctx, channel)
-	}
-	return nil
 }
 
 // buildKey constructs the full cache key used for both local and remote.
@@ -389,7 +330,7 @@ func (m *MultiLevelCache) GetOrLoad(
 			}
 			return m.codecEncode(val)
 		}),
-		jcache.Refresh(m.config.EnableRefresh || m.config.RefreshDuration > 0),
+		jcache.Refresh(m.config.RefreshDuration > 0),
 	)
 	if err != nil {
 		if errors.Is(err, ErrCacheNotFound) {
@@ -471,123 +412,8 @@ func (m *MultiLevelCache) Close() error {
 	// can't invoke TaskSize() on a closed jetcache-go instance.
 	m.unregTaskSize()
 	m.cache.Close()
-	if m.pubsub != nil {
-		_ = m.pubsub.Close()
-	}
 	log.Info("[Cache][%s/%s][closed]", m.config.Family, m.config.Name)
 	return nil
-}
-
-// startEventSubscription listens for invalidate events from Redis Pub/Sub (legacy mode).
-func (m *MultiLevelCache) startEventSubscription() {
-	if m.redisCmdable == nil {
-		return
-	}
-	pubsub := m.subscribeRedis(context.Background(), m.config.EventChannel)
-	if pubsub == nil {
-		return
-	}
-	m.pubsub = pubsub
-	log.Info("[Cache][%s/%s][event_subscription][channel=%s]",
-		m.config.Family, m.config.Name, m.config.EventChannel)
-
-	ch := pubsub.Channel()
-	for {
-		select {
-		case <-m.stopCh:
-			return
-		case msg, ok := <-ch:
-			if !ok {
-				log.Warn("[Cache][%s/%s][event_subscription_closed][channel=%s]",
-					m.config.Family, m.config.Name, m.config.EventChannel)
-				m.resubscribeEvents()
-				return
-			}
-			m.handleEvent(msg.Payload)
-		}
-	}
-}
-
-// handleEvent handles incoming invalidate events (legacy Pub/Sub mode).
-func (m *MultiLevelCache) handleEvent(data string) {
-	var event map[string]interface{}
-	if err := json.Unmarshal([]byte(data), &event); err != nil {
-		log.Warn("[Cache][%s/%s][event_decode_error]: %v", m.config.Family, m.config.Name, err)
-		return
-	}
-	action, _ := event["action"].(string)
-	if action != "invalidate" {
-		return
-	}
-	keys, _ := event["keys"].([]interface{})
-	if len(keys) > 0 {
-		for _, k := range keys {
-			key, ok := k.(string)
-			if ok {
-				if m.localCache != nil {
-					m.localCache.Del(m.buildKey(key))
-				} else {
-					m.cache.DeleteFromLocalCache(m.buildKey(key))
-				}
-			}
-		}
-	} else {
-		// Single key format (backward compat with old cache)
-		key, ok := event["key"].(string)
-		if ok {
-			if m.localCache != nil {
-				m.localCache.Del(m.buildKey(key))
-			} else {
-				m.cache.DeleteFromLocalCache(m.buildKey(key))
-			}
-		}
-	}
-}
-
-// resubscribeEvents attempts to re-subscribe after a disconnection, with exponential backoff.
-func (m *MultiLevelCache) resubscribeEvents() {
-	if m.redisCmdable == nil {
-		return
-	}
-	backoff := time.Second
-	const maxBackoff = 30 * time.Second
-	for {
-		select {
-		case <-m.stopCh:
-			return
-		case <-time.After(backoff):
-		}
-		pubsub := m.subscribeRedis(context.Background(), m.config.EventChannel)
-		if pubsub == nil {
-			return
-		}
-		m.pubsub = pubsub
-		log.Info("[Cache][%s/%s][event_resubscribed][channel=%s]",
-			m.config.Family, m.config.Name, m.config.EventChannel)
-		ch := pubsub.Channel()
-		disconnected := false
-		gotMessage := false
-		for !disconnected {
-			select {
-			case <-m.stopCh:
-				return
-			case msg, ok := <-ch:
-				if !ok {
-					disconnected = true
-				} else {
-					gotMessage = true
-					m.handleEvent(msg.Payload)
-				}
-			}
-		}
-		// Reset backoff after a session that delivered traffic; keep escalating
-		// if we're flapping (subscribed but never received before disconnect).
-		if gotMessage {
-			backoff = time.Second
-		} else if backoff < maxBackoff {
-			backoff *= 2
-		}
-	}
 }
 
 // generateInstanceID generates a unique instance ID
@@ -614,7 +440,7 @@ func GetCache(
 	name string,
 	family string,
 	cacheType CacheType,
-	localMaxSize int,
+	localItemSize int,
 	localTTL int,
 	remoteTTL int,
 	redisCmdable redis.Cmdable,
@@ -640,13 +466,13 @@ func GetCache(
 	}
 
 	cfg := Config{
-		Name:         name,
-		Family:       family,
-		CacheType:    cacheType,
-		LocalMaxSize: localMaxSize,
-		LocalTTL:     localTTL,
-		RemoteTTL:    remoteTTL,
-		RedisCmdable: redisCmdable,
+		Name:          name,
+		Family:        family,
+		CacheType:     cacheType,
+		LocalItemSize: localItemSize,
+		LocalTTL:      localTTL,
+		RemoteTTL:     remoteTTL,
+		RedisCmdable:  redisCmdable,
 	}
 
 	c, err := New(cfg)

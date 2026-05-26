@@ -192,21 +192,7 @@ func (p *Producer) handleEvents(c *gin.Context) {
 	// Send initial status
 	status, err := p.statusStore.Get(c.Request.Context(), taskID)
 	if err == nil && status != nil {
-		event := map[string]any{
-			"task_id":           taskID,
-			"status":            status.Status,
-			"progress":          status.Progress,
-			"error":             status.Error,
-			"message":           status.Message,
-			"result":            status.Result,
-			"created_at":        status.CreatedAt,
-			"started_at":        status.StartedAt,
-			"finished_at":       status.FinishedAt,
-			"endpoint":          status.Endpoint,
-			"priority":          status.Priority,
-			"supports_progress": status.SupportsProgress,
-		}
-		fmt.Fprintf(c.Writer, "data: %s\n\n", toJSON(event))
+		fmt.Fprintf(c.Writer, "data: %s\n\n", toJSON(taskStatusToEvent(taskID, status)))
 		c.Writer.Flush()
 
 		// If already in terminal state, don't keep connection alive
@@ -306,22 +292,16 @@ func (p *Producer) handleEnqueue(ep string) gin.HandlerFunc {
 			},
 		}).Err(); err != nil {
 			// Clean up status if we fail to enqueue
-			p.statusStore.rdb.Del(ctx, p.statusStore.key(taskID))
+			_ = p.statusStore.Delete(ctx, taskID)
 			log.Error("[Producer][%s][enqueue_error][task_id=%s]: %v", ep, taskID, err)
 			response.InternalError(c)
 			metrics.ObserveAsyncQueueEnqueue(ep, "failure")
 			return
 		}
 
-		// 异步发布入队事件
+		// Publish the initial queued event (best-effort, off the request path)
 		go func() {
-			ts := &TaskStatus{
-				Status:    TaskStatusQueued,
-				Endpoint:  ep,
-				Priority:  priority,
-				CreatedAt: time.Now().Unix(),
-			}
-			_ = p.statusStore.PublishTaskEvent(context.Background(), taskID, ts)
+			p.statusStore.publishTaskEvent(context.Background(), taskID)
 		}()
 
 		metrics.ObserveAsyncQueueEnqueue(ep, "success")
