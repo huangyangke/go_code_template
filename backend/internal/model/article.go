@@ -1,7 +1,7 @@
 package model
 
 import (
-	dbmysql "github.com/example/go-template/pkg/aikit/database/mysql"
+	dbmysql "github.com/huangyangke/go-aikit/database/mysql"
 )
 
 // Article represents the articles table.

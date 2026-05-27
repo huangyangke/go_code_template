@@ -8,7 +8,10 @@ export async function swrFetcher<T>(url: string): Promise<T> {
   if (body.code !== ApiCode.SUCCESS) {
     throw new Error(body.msg || "请求失败");
   }
-  return body.data;
+  // backend normalizes nil data to [] for list endpoints, but some
+  // operations (delete, update) legitimately return null data.
+  // Cast is safe because the caller controls T via useSWR<T>.
+  return body.data as T;
 }
 
 export const swrConfig: SWRConfiguration = {

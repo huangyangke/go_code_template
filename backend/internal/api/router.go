@@ -5,8 +5,8 @@ import (
 
 	"github.com/example/go-template/internal/dao"
 	"github.com/example/go-template/internal/service"
-	dbmysql "github.com/example/go-template/pkg/aikit/database/mysql"
-	dbredis "github.com/example/go-template/pkg/aikit/database/redis"
+	dbmysql "github.com/huangyangke/go-aikit/database/mysql"
+	dbredis "github.com/huangyangke/go-aikit/database/redis"
 )
 
 // RegisterRoutes wires up dependencies and registers all API routes.

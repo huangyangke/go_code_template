@@ -1,6 +1,6 @@
 export interface ApiResponse<T = unknown> {
   code: number;
-  data: T;
+  data: T | null;
   msg: string;
   task_id: string;
 }

@@ -9,8 +9,8 @@ import (
 	apperrors "github.com/example/go-template/internal/errors"
 	"github.com/example/go-template/internal/schema"
 	"github.com/example/go-template/internal/service"
-	"github.com/example/go-template/pkg/aikit/app/response"
-	"github.com/example/go-template/pkg/aikit/log"
+	"github.com/huangyangke/go-aikit/app/response"
+	"github.com/huangyangke/go-aikit/log"
 )
 
 // ArticleHandler handles HTTP requests for articles.
@@ -28,7 +28,7 @@ func NewArticleHandler(svc *service.ArticleService) *ArticleHandler {
 // @Produce     json
 // @Param       page   query int false "Page number" default(1)
 // @Param       size   query int false "Page size"   default(20)
-// @Success     200    {object} response.ApiResponse
+// @Success     200    {object} response.APIResponse
 // @Router      /v1/articles [get]
 func (h *ArticleHandler) List(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -53,7 +53,7 @@ func (h *ArticleHandler) List(c *gin.Context) {
 // @Accept      json
 // @Produce     json
 // @Param       body body schema.CreateArticleReq true "Article"
-// @Success     200  {object} response.ApiResponse
+// @Success     200  {object} response.APIResponse
 // @Router      /v1/articles [post]
 func (h *ArticleHandler) Create(c *gin.Context) {
 	var req schema.CreateArticleReq
@@ -74,7 +74,7 @@ func (h *ArticleHandler) Create(c *gin.Context) {
 // @Tags        articles
 // @Produce     json
 // @Param       id  path int true "Article ID"
-// @Success     200 {object} response.ApiResponse
+// @Success     200 {object} response.APIResponse
 // @Router      /v1/articles/{id} [get]
 func (h *ArticleHandler) Get(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -97,7 +97,7 @@ func (h *ArticleHandler) Get(c *gin.Context) {
 // @Produce     json
 // @Param       id   path int                    true "Article ID"
 // @Param       body body schema.UpdateArticleReq true "Article"
-// @Success     200  {object} response.ApiResponse
+// @Success     200  {object} response.APIResponse
 // @Router      /v1/articles/{id} [put]
 func (h *ArticleHandler) Update(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -124,7 +124,7 @@ func (h *ArticleHandler) Update(c *gin.Context) {
 // @Tags        articles
 // @Produce     json
 // @Param       id path int true "Article ID"
-// @Success     200 {object} response.ApiResponse
+// @Success     200 {object} response.APIResponse
 // @Router      /v1/articles/{id} [delete]
 func (h *ArticleHandler) Delete(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)

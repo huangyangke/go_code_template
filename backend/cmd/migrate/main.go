@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/example/go-template/pkg/aikit/config"
-	dbmysql "github.com/example/go-template/pkg/aikit/database/mysql"
-	"github.com/example/go-template/pkg/aikit/log"
+	"github.com/huangyangke/go-aikit/config"
+	dbmysql "github.com/huangyangke/go-aikit/database/mysql"
+	"github.com/huangyangke/go-aikit/log"
 )
 
 //go:embed migrations/*.sql

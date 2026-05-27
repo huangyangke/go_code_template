@@ -3,7 +3,7 @@ package dao
 import (
 	"context"
 
-	dbmysql "github.com/example/go-template/pkg/aikit/database/mysql"
+	dbmysql "github.com/huangyangke/go-aikit/database/mysql"
 	"gorm.io/gorm"
 
 	"github.com/example/go-template/internal/model"
