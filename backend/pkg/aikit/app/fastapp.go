@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -58,13 +59,21 @@ type MiddlewareConfig struct {
 	CORSConfig       middleware.CORSConfig
 	EnableTokenAuth  bool
 	TokenVerifyFunc  middleware.VerifyFunc
-	TokenWhitelist   []string
-	EnableRateLimit  bool
-	RateLimitRDB     redis.Cmdable
-	RateLimitConfig  middleware.RateLimitConfig
-	InternalToken    string
-	EnablePprof      bool
-	EnableSwagger    bool
+	// ExtraVerifyFunc is an additional verify function composed with TokenVerifyFunc via OR logic:
+	// the request is accepted if either function returns true. Typically used to layer a
+	// third-party JWT verifier on top of the built-in aikit JWT verifier.
+	ExtraVerifyFunc middleware.VerifyFunc
+	// InternalToken is a static token for internal service-to-service calls.
+	// Requests carrying this token bypass all other verification.
+	// Use constant-time comparison is applied automatically — safe against timing attacks.
+	// Load from an environment variable; rotate immediately on leakage.
+	InternalToken  string
+	TokenWhitelist []string
+	EnableRateLimit bool
+	RateLimitRDB    redis.Cmdable
+	RateLimitConfig middleware.RateLimitConfig
+	EnablePprof     bool
+	EnableSwagger   bool
 }
 
 // AsyncQueueConfig holds async queue integration settings
@@ -78,6 +87,11 @@ type AsyncQueueConfig struct {
 	SchedulerConfig  *async_queue.SchedulerConfig
 	PelConfig        *async_queue.PelConfig
 	EndpointLimitCfg *async_queue.EndpointLimitConfig
+	// FeatureMode sets the feature preset (Lite / Standard / Full).
+	// Defaults to FeatureModeFull when zero. Use FeatureOverrides for fine-grained control.
+	FeatureMode      async_queue.FeatureMode
+	// FeatureOverrides selectively enables features on top of FeatureMode.
+	FeatureOverrides *async_queue.FeatureConfig
 }
 
 // XxlJobConfig holds XXL-Job integration settings
@@ -346,8 +360,11 @@ func (a *FastApp) Family() string {
 }
 
 // buildMiddlewareChain constructs the middleware chain in execution order:
-// Prometheus (outermost) -> RequestID -> RequestLog -> CORS -> RateLimit -> TokenAuth (innermost)
+// Recovery (outermost) -> Prometheus -> RequestID -> RequestLog -> CORS -> RateLimit -> TokenAuth (innermost)
 func (a *FastApp) buildMiddlewareChain() {
+	// Recovery must be outermost so panics in any subsequent middleware are caught.
+	a.engine.Use(gin.Recovery())
+
 	if a.mwCfg.EnablePrometheus {
 		a.engine.Use(middleware.Prometheus())
 	}
@@ -362,29 +379,38 @@ func (a *FastApp) buildMiddlewareChain() {
 	if !a.mwCfg.DisableCORS {
 		a.engine.Use(middleware.CORS(a.mwCfg.CORSConfig))
 	}
-	if a.mwCfg.EnableRateLimit && a.mwCfg.RateLimitRDB != nil {
+	if a.mwCfg.EnableRateLimit {
+		if a.mwCfg.RateLimitRDB == nil {
+			panic("fastapp: EnableRateLimit=true but RateLimitRDB is nil")
+		}
 		a.engine.Use(middleware.RateLimit(a.mwCfg.RateLimitRDB, a.mwCfg.RateLimitConfig))
 	}
-	if a.mwCfg.EnableTokenAuth && a.mwCfg.TokenVerifyFunc != nil {
+	if a.mwCfg.EnableTokenAuth {
+		if a.mwCfg.TokenVerifyFunc == nil && a.mwCfg.ExtraVerifyFunc == nil && a.mwCfg.InternalToken == "" {
+			panic("fastapp: EnableTokenAuth=true but no verify function or InternalToken configured")
+		}
 		whitelist := a.mwCfg.TokenWhitelist
 		whitelist = append(whitelist,
 			"/healthz",
 			"/monitor/prometheus",
-			"/docs",
-			"/redoc",
-			"/openapi.json",
 		)
-		if a.mwCfg.EnablePprof {
-			whitelist = append(whitelist, "/debug/pprof/")
-		}
 		if a.mwCfg.EnableSwagger {
 			whitelist = append(whitelist, "/swagger/")
 		}
-		a.engine.Use(middleware.TokenAuth(a.mwCfg.TokenVerifyFunc, whitelist...))
-	}
 
-	// Always add recovery
-	a.engine.Use(gin.Recovery())
+		verify := a.mwCfg.TokenVerifyFunc
+		// Compose OR logic: accept if either primary or extra verifier passes.
+		if verify != nil && a.mwCfg.ExtraVerifyFunc != nil {
+			verify = middleware.OrVerify(verify, a.mwCfg.ExtraVerifyFunc)
+		} else if verify == nil {
+			verify = a.mwCfg.ExtraVerifyFunc
+		}
+		// Internal token bypasses all other verification (checked first, constant-time).
+		if a.mwCfg.InternalToken != "" {
+			verify = middleware.WithInternalToken(a.mwCfg.InternalToken, verify)
+		}
+		a.engine.Use(middleware.TokenAuth(verify, whitelist...))
+	}
 }
 
 // healthCheckHandler returns a handler that checks registered MySQL and Redis instances
@@ -476,6 +502,7 @@ func (a *FastApp) setupAsyncQueue() error {
 	opts := []async_queue.ConsumerOption{
 		async_queue.WithGroupName(cfg.GroupName),
 		async_queue.WithConsumerName(cfg.ConsumerName),
+		async_queue.WithFeatures(async_queue.ResolveFeatureMode(cfg.FeatureMode, cfg.FeatureOverrides)),
 	}
 	if cfg.SchedulerConfig != nil {
 		opts = append(opts, async_queue.WithScheduler(*cfg.SchedulerConfig))
@@ -538,11 +565,12 @@ func (a *FastApp) Run() error {
 
 	// Create HTTP server
 	a.server = &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", a.cfg.Host, a.cfg.Port),
-		Handler:      a.engine,
-		ReadTimeout:  a.svrCfg.ReadTimeout,
-		WriteTimeout: a.svrCfg.WriteTimeout,
-		IdleTimeout:  a.svrCfg.IdleTimeout,
+		Addr:           fmt.Sprintf("%s:%d", a.cfg.Host, a.cfg.Port),
+		Handler:        a.engine,
+		ReadTimeout:    a.svrCfg.ReadTimeout,
+		WriteTimeout:   a.svrCfg.WriteTimeout,
+		IdleTimeout:    a.svrCfg.IdleTimeout,
+		MaxHeaderBytes: 1 << 20,
 	}
 
 	// Start async queue consumer
@@ -588,7 +616,7 @@ func (a *FastApp) Run() error {
 	errCh := make(chan error, 1)
 	go func() {
 		log.Info("FastApp listening on %s:%d (family: %s)", a.cfg.Host, a.cfg.Port, a.cfg.Family)
-		if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := a.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
@@ -620,16 +648,17 @@ func (a *FastApp) Run() error {
 
 // shutdown performs graceful shutdown
 func (a *FastApp) shutdown() error {
-	// Hard kill if graceful shutdown stalls (e.g. a hook blocks forever).
-	// The timer is cancelled on successful return so callers that hold the
-	// process alive after Run() (tests, embedded runners) are not killed.
+	// Hard kill if graceful shutdown stalls. Use NewTimer so the goroutine
+	// can be stopped cleanly on success, avoiding a leaked timer goroutine.
 	done := make(chan struct{})
 	defer close(done)
+	timer := time.NewTimer(a.svrCfg.ShutdownTimeout + 5*time.Second)
 	go func() {
 		select {
 		case <-done:
+			timer.Stop()
 			return
-		case <-time.After(a.svrCfg.ShutdownTimeout + 5*time.Second):
+		case <-timer.C:
 			log.Error("shutdown timeout exceeded, forcing exit")
 			os.Exit(1)
 		}

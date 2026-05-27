@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/semaphore"
 
@@ -37,6 +40,7 @@ type Consumer struct {
 	scheduler SchedulerConfig
 	pel       PelConfig
 	limiter   ConcurrencyLimiter
+	features  FeatureConfig
 
 	sem *semaphore.Weighted // L1 全局容量
 
@@ -70,6 +74,9 @@ func WithPel(cfg PelConfig) ConsumerOption {
 func WithLimiter(l ConcurrencyLimiter) ConsumerOption {
 	return func(c *Consumer) { c.limiter = l }
 }
+func WithFeatures(f FeatureConfig) ConsumerOption {
+	return func(c *Consumer) { c.features = f }
+}
 
 func NewConsumer(
 	rdb *redis.Client,
@@ -80,6 +87,9 @@ func NewConsumer(
 ) *Consumer {
 	if family == "" {
 		panic("async_queue: family (namespace) is required")
+	}
+	if err := ValidateEndpointConfig(endpoints); err != nil {
+		panic(err.Error())
 	}
 	c := &Consumer{
 		rdb:               rdb,
@@ -93,6 +103,7 @@ func NewConsumer(
 		scheduler:         defaultSchedulerConfig(),
 		pel:               defaultPelConfig(),
 		limiter:           &NoopConcurrencyLimiter{},
+		features:          ResolveFeatureMode(FeatureModeFull, nil),
 		activeMsgIDs:      make(map[string]struct{}),
 		pendingByEndpoint: make(map[string]*EndpointPendingQueue),
 		taskCancelFuncs:   make(map[string]context.CancelFunc),
@@ -104,6 +115,12 @@ func NewConsumer(
 	// which would make semaphore.Acquire block forever.
 	if c.scheduler.WorkerCapacity <= 0 {
 		c.scheduler.WorkerCapacity = DefaultWorkerCapacity
+	}
+	if err := ValidateSchedulerConfig(c.scheduler); err != nil {
+		panic(err.Error())
+	}
+	if err := ValidatePelConfig(c.pel); err != nil {
+		panic(err.Error())
 	}
 	c.sem = semaphore.NewWeighted(int64(c.scheduler.WorkerCapacity))
 	return c
@@ -117,7 +134,7 @@ func (c *Consumer) Start(ctx context.Context) error {
 	c.cancel = cancel
 	c.mu.Unlock()
 
-	consumerName := fmt.Sprintf("%d_%s", os.Getpid(), c.consumerName)
+	consumerName := fmt.Sprintf("%d_%s_%s", os.Getpid(), c.consumerName, uuid.NewString()[:8])
 	log.Info("[Consumer][start][consumer=%s][group=%s][stream=%s][namespace=%s][worker_capacity=%d]",
 		consumerName, c.groupName, c.cfg.StreamKey, c.namespace, c.scheduler.WorkerCapacity)
 
@@ -129,15 +146,21 @@ func (c *Consumer) Start(ctx context.Context) error {
 	}
 
 	// 启动心跳
-	go c.runHeartbeat(ctx, consumerName)
+	if c.features.EnableHeartbeat {
+		go c.runHeartbeat(ctx, consumerName)
+	}
 
 	// 启动取消订阅
-	go c.runCancelSubscriber(ctx)
+	if c.features.EnableCancel {
+		go c.runCancelSubscriber(ctx)
+	}
 
 	// 启动时做一次 PEL 恢复
-	if err := c.recoverPending(ctx, consumerName); err != nil {
-		// PEL 恢复失败不阻断主流程
-		log.Warn("[Consumer][PEL_recovery][startup_error][consumer=%s]: %v", consumerName, err)
+	if c.features.EnablePelRecovery {
+		if err := c.recoverPending(ctx, consumerName); err != nil {
+			// PEL 恢复失败不阻断主流程
+			log.Warn("[Consumer][PEL_recovery][startup_error][consumer=%s]: %v", consumerName, err)
+		}
 	}
 
 	return c.loop(ctx, consumerName)
@@ -174,7 +197,7 @@ func (c *Consumer) Stop() {
 func (c *Consumer) loop(ctx context.Context, consumerName string) error {
 	maxPending := DefaultMaxPendingMultiplier * c.scheduler.WorkerCapacity
 	var nextPelRecovery time.Time
-	if !c.pel.ScanOnStartupOnly {
+	if c.features.EnablePelRecovery && !c.pel.ScanOnStartupOnly {
 		nextPelRecovery = time.Now().Add(c.pel.MinIdle)
 	}
 
@@ -264,19 +287,37 @@ func (c *Consumer) loop(ctx context.Context, consumerName string) error {
 // ================================
 
 // spawnAdmit launches admitMessage in a tracked goroutine so Stop() can drain it.
+// Skips execution if the consumer has already stopped.
 func (c *Consumer) spawnAdmit(ctx context.Context, msgID string, data map[string]any) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
+		c.mu.Lock()
+		running := c.running
+		c.mu.Unlock()
+		// best-effort guard: Stop() may set running=false between this check
+		// and admitMessage execution. wg.Wait+StopTimeout provides the hard
+		// guarantee; this check simply reduces wasted work.
+		if !running {
+			return
+		}
 		c.admitMessage(ctx, msgID, data)
 	}()
 }
 
 // spawnHandleTask launches handleTask in a tracked goroutine so Stop() can drain it.
+// Skips execution if the consumer has already stopped.
 func (c *Consumer) spawnHandleTask(ctx context.Context, msgID string, data map[string]any) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
+		c.mu.Lock()
+		running := c.running
+		c.mu.Unlock()
+		// best-effort guard (same rationale as spawnAdmit).
+		if !running {
+			return
+		}
 		c.handleTask(ctx, msgID, data)
 	}()
 }
@@ -381,7 +422,9 @@ func (c *Consumer) handleTask(ctx context.Context, msgID string, data map[string
 		delete(c.taskCancelFuncs, taskID)
 		delete(c.activeMsgIDs, msgID)
 		c.mu.Unlock()
-		_ = c.limiter.Release(ctx, endpoint)
+		// Use Background context for cleanup so shutdown/timeout cancellation
+		// doesn't prevent releasing the distributed limiter counter.
+		_ = c.limiter.Release(context.Background(), endpoint)
 	}()
 
 	var params map[string]any
@@ -617,7 +660,7 @@ func (c *Consumer) recoverPending(ctx context.Context, consumerName string) erro
 			if err == nil {
 				for _, msg := range claimed {
 					count := deliveryCounts[msg.ID]
-					if int(count) > c.pel.MaxRetries {
+					if int(count) >= c.pel.MaxRetries {
 						taskID, _ := msg.Values["task_id"].(string)
 						_ = c.statusStore.MarkFailed(ctx, taskID,
 							fmt.Sprintf("PEL recovery: exceeded max retries (%d)", count))
@@ -655,7 +698,7 @@ func (c *Consumer) recoverPending(ctx context.Context, consumerName string) erro
 
 func (c *Consumer) createGroup(ctx context.Context) error {
 	err := c.rdb.XGroupCreateMkStream(ctx, c.cfg.StreamKey, c.groupName, StreamGroupStartID).Err()
-	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
+	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		return err
 	}
 	return nil
@@ -687,12 +730,17 @@ func extractPriority(data map[string]interface{}) int {
 	if v, ok := data["priority"]; ok {
 		switch p := v.(type) {
 		case int:
-			return p
+			return clampPriority(p)
 		case int64:
-			return int(p)
+			return clampPriority(int(p))
 		case float64:
-			return int(p)
+			return clampPriority(int(p))
 		case string:
+			p = strings.TrimSpace(p)
+			if n, err := strconv.Atoi(p); err == nil {
+				return clampPriority(n)
+			}
+			// Fall back to first digit for mixed strings like "3-high"
 			for _, ch := range p {
 				if ch >= '0' && ch <= '9' {
 					return int(ch - '0')
@@ -701,6 +749,16 @@ func extractPriority(data map[string]interface{}) int {
 		}
 	}
 	return 5
+}
+
+func clampPriority(v int) int {
+	if v < 0 {
+		return 0
+	}
+	if v > 9 {
+		return 9
+	}
+	return v
 }
 
 func toStringMap(data map[string]interface{}) map[string]any {
