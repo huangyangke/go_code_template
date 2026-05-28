@@ -1,0 +1,225 @@
+# Go 项目模板
+
+基于内置 aikit 工具包（`pkg/aikit/`）的 Go 后端服务项目模板，快速搭建生产级 Go HTTP 服务。
+
+## 核心功能
+
+- **功能 1** - 功能描述
+- **功能 2** - 功能描述
+
+## 技术栈
+
+- **后端运行时**: Go 1.25+
+- **Web 框架**: Gin
+- **ORM**: GORM (MySQL)
+- **缓存**: Redis (go-redis/v9)
+- **基础设施**: 内置 aikit（`pkg/aikit/`，已随仓库内置；提供配置、日志、缓存、指标、熔断、HTTP 客户端、异步队列、xxl-job 等）
+- **API 文档**: Swagger (swaggo)
+- **数据库迁移**: golang-migrate
+- **前端**: React 19 + React Router v7, SWR, Zustand, Zod, Tailwind CSS v4, shadcn/ui, axios
+- **前端工具**: Vite 8, Biome, Vitest
+
+## 项目结构
+
+```
+.
+├── backend/                 # Go 后端
+│   ├── cmd/
+│   │   ├── server/
+│   │   │   └── main.go         # 服务启动入口
+│   │   └── migrate/
+│   │       ├── main.go         # 数据库迁移入口
+│   │       └── migrations/     # SQL 迁移文件（*.up.sql / *.down.sql）
+│   ├── internal/            # 应用代码（仅本仓库可用）
+│   │   ├── api/            # HTTP 处理层（路由绑定、参数解析、响应）
+│   │   ├── service/        # 业务逻辑层
+│   │   ├── dao/            # 数据访问层（SQL 操作）
+│   │   ├── model/          # 数据库模型（GORM 结构体）
+│   │   │   └── constants/  # Redis Key 模板
+│   │   ├── bcode/          # 业务错误码（BizError）
+│   │   └── schema/         # 请求/响应结构体（DTO）
+│   ├── pkg/
+│   │   └── aikit/          # 内置 aikit 工具包（不要直接修改，除非需要定制基础设施）
+│   │       ├── app/        # FastApp、middleware、response、auth、health、httpclient、xjob、async_queue
+│   │       ├── cache/      # 多级缓存
+│   │       ├── config/     # 配置加载（YAML/env/Nacos/热重载）
+│   │       ├── database/   # mysql/redis/pulsar 客户端
+│   │       ├── log/        # 日志
+│   │       ├── metrics/    # Prometheus 指标
+│   │       ├── resilience/ # 熔断 + 重试
+│   │       ├── utils/      # 通用工具
+│   │       └── version/    # 构建版本
+│   ├── configs/
+│   │   ├── config.yaml     # 配置文件
+│   │   ├── .env.dev        # 开发环境变量
+│   │   └── .env.prod       # 生产环境变量
+│   ├── docs/               # Swagger 生成文档
+│   ├── logs/               # 运行日志（gitignore）
+│   ├── Dockerfile
+│   ├── go.mod
+│   └── go.sum
+├── frontend/               # React 前端（React Router v7 + Tailwind CSS）
+│   ├── app/
+│   │   ├── routes/         # 文件路由
+│   │   ├── services/       # API 层（axios + SWR fetcher）
+│   │   ├── components/     # 通用组件（ui/ 为 shadcn/ui）
+│   │   ├── stores/         # Zustand stores
+│   │   └── types/          # TypeScript 类型
+│   ├── package.json
+│   └── vite.config.ts
+├── run.sh                  # 一键启动/停止脚本
+└── CLAUDE.md
+```
+
+## 分层架构
+
+采用 **Handler → Service → DAO → Model** 四层架构：
+
+| 层级 | 职责 | 依赖方向 |
+|------|------|----------|
+| Handler | HTTP 路由、参数解析、响应格式化 | → Service |
+| Service | 业务逻辑、事务控制、bcode 错误转换 | → DAO |
+| DAO | SQL 操作 (CRUD) | → Model |
+| Model | 表结构、ORM 映射 | 无 |
+
+## 业务错误码（bcode）
+
+业务错误定义在 `backend/internal/bcode/bcode.go`，每个错误携带 HTTP 状态码、业务码、消息：
+
+```go
+// 定义（按领域分组）
+var ErrArticleNotFound = bcode.New(http.StatusNotFound, 10100, "文章不存在")
+
+// Service 层：将 gorm.ErrRecordNotFound 转为 bcode
+if errors.Is(err, gorm.ErrRecordNotFound) {
+    return nil, bcode.ErrArticleNotFound
+}
+
+// Handler 层：response.JSONErr 自动识别 bcode.BizError，无需额外处理
+response.JSONErr(c, nil, err)
+```
+
+命名规范：`Err{Domain}{Reason}`，如 `ErrUserNotFound`、`ErrOrderExpired`。
+
+业务码数字前缀按领域分段（示例）：
+
+| 领域 | 前缀 | 备注 |
+|------|------|------|
+| 框架保留（response 包） | 10000–10099 | 禁止在 bcode 中使用 |
+| Article | 10100–10199 | |
+| User | 10200–10299 | |
+| Order | 10300–10399 | |
+
+## 命令
+
+```bash
+./run.sh install            # 安装后端 + 前端依赖
+./run.sh start              # 启动后端 + 前端
+./run.sh stop               # 停止所有服务
+./run.sh restart            # 重启所有服务
+./run.sh status             # 查看状态
+./run.sh backend start|stop # 仅操作后端
+./run.sh frontend start|stop# 仅操作前端
+./run.sh build              # 编译后端二进制
+./run.sh migrate            # 执行数据库迁移
+./run.sh test               # 运行后端测试
+./run.sh lint               # 代码检查（golangci-lint）
+./run.sh swagger            # 生成 Swagger 文档
+```
+
+## 相关文档
+
+在处理特定领域的工作时，请阅读以下文档或者使用以下技能：
+
+| Document or Skill | When to Read or Use |
+|-------------------|---------------------|
+| http://127.0.0.1:{port}/swagger/index.html | Swagger API 文档（{port} 替换为实际端口） |
+| http://127.0.0.1:{port}/healthz | 健康检查接口 |
+| http://127.0.0.1:5173 | 前端开发服务器 |
+| frontend/AGENTS.md | 前端开发规范（React Router v7、SWR、Zustand 等） |
+| backend/pkg/aikit/*/README.md | 查阅内置 aikit 子模块用法（如 `backend/pkg/aikit/config/README.md`） |
+| /plugin:context7:context7 | 获取开源库最新文档 |
+| /git-commit | 提交代码 |
+
+## 注意事项
+
+- `backend/internal/api/article.go` 是示例实现，参考该示例开发其他功能
+- 使用 `pkg/aikit/app/response` 包统一响应格式，不要直接调用 `c.JSON`
+- 数据库操作必须在 DAO 层，禁止在 api/service 层直接调用 GORM
+- 新增路由在 `backend/internal/api/router.go` 的 `RegisterRoutes` 函数中注册
+- 配置通过 `pkg/aikit/config` 加载，支持 YAML + 环境变量 + 热重载
+- `pkg/aikit/` 是内置工具包；若需定制基础设施直接改它即可（无外部依赖）
+- 业务错误在 `internal/bcode/` 定义，Service 层负责将 DAO 错误（如 `gorm.ErrRecordNotFound`）转换为 bcode；Handler 层统一用 `response.JSONErr` 处理
+- Redis Key 模板定义在 `internal/model/constants/redis_key.go`，用 `NewKey(tmpl, ttl)` 定义，key 模板和 TTL 绑定在一起；调用方用 `key.Format(args...)` 生成 key，`key.TTL` 取过期时间
+- 分页默认值（page=1、page_size=20、max=100）直接写死在 DAO/Handler 调用处，不抽常量
+- 开发步骤：**小功能完整闭环迭代**，测试驱动开发 → 完整功能实现 → review → 提交 → 重启服务 → 人工 check → 再做下一个功能
+- 新增表结构变更时，在 `backend/cmd/migrate/migrations/` 下创建迁移文件（格式：`{序号}_{描述}.up.sql` / `.down.sql`），然后执行 `./run.sh migrate`
+- 每一次我的指令你觉得模棱两可，向我提问，明确需求再行动
+
+---
+
+## 编程行为准则
+
+Behavioral guidelines to reduce common LLM coding mistakes.
+
+**Tradeoff:** 这些准则偏向谨慎而非速度。对于简单任务，请自行判断。
+
+### 1. Think Before Coding
+
+**不要假设。不要隐藏困惑。展示权衡。**
+
+在实现之前：
+- 明确陈述你的假设。如果不确定，先问。
+- 如果存在多种解释，都展示出来——不要默默选择一个。
+- 如果存在更简单的方案，指出它。在合理时提出反对意见。
+- 如果有不清楚的地方，停下来。说出什么让你困惑。先问清楚。
+
+### 2. Simplicity First
+
+**最小化代码解决问题。不做 speculation 的工作。**
+
+- 不添加需求之外的功能。
+- 不为单次使用的代码创建抽象。
+- 不添加未被请求的"灵活性"或"可配置性"。
+- 不处理不可能发生的场景的错误。
+- 如果你写了200行而可以写成50行，重写。
+
+问自己："一个资深工程师会说这太复杂了吗？"如果是，简化。
+
+### 3. Surgical Changes
+
+**只触碰必须改的地方。只清理自己的烂摊子。**
+
+编辑现有代码时：
+- 不要"改进"相邻的代码、注释或格式。
+- 不要重构没坏的东西。
+- 匹配现有风格，即使你会有不同做法。
+- 如果注意到无关的死代码，指出它——不要删除它。
+
+当你的改动造成孤立代码时：
+- 移除因你的改动而变得未使用的 imports/变量/函数。
+- 不要删除先前存在的死代码，除非被要求。
+
+检验标准：每一行改动都应该直接源于用户的要求。
+
+### 4. Goal-Driven Execution
+
+**定义成功标准。循环验证直到完成。**
+
+将任务转化为可验证的目标：
+- "添加验证" → "为无效输入写测试，然后让它们通过"
+- "修复 bug" → "写一个复现 bug 的测试，然后让它通过"
+- "重构 X" → "确保测试在重构前后都通过"
+
+对于多步骤任务，陈述一个简要计划：
+```
+1. [步骤] → 验证: [检查点]
+2. [步骤] → 验证: [检查点]
+3. [步骤] → 验证: [检查点]
+```
+
+强的成功标准让你能独立循环。弱的标准（"让它能工作"）需要不断确认。
+
+---
+
+**这些准则生效的表现：** diff 中不必要的改动减少、因过度复杂导致的返工减少、澄清性问题出现在错误之前而非之后。
