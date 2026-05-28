@@ -1,0 +1,43 @@
+# golangci-lint v2 配置
+# 运行: golangci-lint run ./...
+
+version: "2"
+
+run:
+  tests: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/huangyangke/go-aikit
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - unused
+    - godot
+    - gocyclo
+  settings:
+    gocyclo:
+      min-complexity: 30
+    godot:
+      scope: toplevel
+      period: true
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - errcheck
+          - gocyclo
+          - godot
+        path: _test\.go
+      # 装饰性分隔线/分节注释不要求末尾句点
+      - linters:
+          - godot
+        text: "^// [-=─]{3}"
