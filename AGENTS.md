@@ -17,18 +17,20 @@
 ## 命令
 
 ```bash
-./run.sh install            # 安装后端 + 前端依赖
-./run.sh start              # 启动后端 + 前端
-./run.sh stop               # 停止所有服务
-./run.sh restart            # 重启所有服务
-./run.sh status             # 查看状态
-./run.sh backend start|stop # 仅操作后端
-./run.sh frontend start|stop# 仅操作前端
-./run.sh build              # 编译后端二进制
-./run.sh migrate            # 执行数据库迁移
-./run.sh test               # 运行后端测试
-./run.sh lint               # 代码检查（golangci-lint）
-./run.sh swagger            # 生成 Swagger 文档
+./run.sh install                        # 安装后端 + 前端依赖
+./run.sh pre-commit-install             # 安装 Git 提交前检查 hooks
+./run.sh start                          # 启动后端 + 前端
+./run.sh stop                           # 停止所有服务
+./run.sh restart                        # 重启所有服务
+./run.sh status                         # 查看状态
+./run.sh backend start|stop             # 仅操作后端
+./run.sh frontend start|stop            # 仅操作前端
+./run.sh build                          # 编译后端二进制
+./run.sh migrate                        # 执行数据库迁移
+./run.sh test [backend|frontend|all]    # 运行测试（默认 backend）
+./run.sh lint [backend|frontend|all]    # 代码检查（默认 backend）
+./run.sh format [backend|frontend|all]  # 代码格式化（默认 backend）
+./run.sh swagger                        # 生成 Swagger 文档
 ```
 
 ## 相关文档
@@ -38,13 +40,9 @@
 | Document or Skill | When to Read or Use |
 |-------------------|---------------------|
 | http://127.0.0.1:{port}/swagger/index.html | Swagger API 文档（{port} 替换为实际端口） |
-| http://127.0.0.1:{port}/healthz | 健康检查接口 |
-| http://127.0.0.1:5173 | 前端开发服务器 |
-| backend/AGENTS.md | 后端开发规范（分层架构、代码规范、测试规范等） |
-| frontend/AGENTS.md | 前端开发规范（React Router v7、SWR、Zustand 等） |
 | backend/pkg/aikit/*/README.md | 查阅内置 aikit 子模块用法 |
+| backend/Build-Docker.md | Docker 构建、推送、运维命令 |
 | /plugin:context7:context7 | 获取开源库最新文档 |
-| /git-commit | 提交代码 |
 
 ## 注意事项
 

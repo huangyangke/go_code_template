@@ -210,20 +210,82 @@ install_frontend() {
 # ─── 工具命令 ─────────────────────────────────────────────────────────────────
 
 run_tests() {
-    log_info "运行后端测试..."
-    cd "$BACKEND_DIR" || exit 1
-    go test ./... -v -count=1
+    local target="${1:-backend}"
+    case "$target" in
+        backend)
+            log_info "运行后端测试..."
+            cd "$BACKEND_DIR" || exit 1
+            go test ./... -v -count=1
+            ;;
+        frontend)
+            log_info "运行前端测试..."
+            cd "$FRONTEND_DIR" || exit 1
+            pnpm test -- --passWithNoTests
+            ;;
+        all)
+            run_tests backend || return 1
+            run_tests frontend
+            ;;
+        *) log_error "未知目标：test $target"; return 1 ;;
+    esac
 }
 
 run_lint() {
-    log_info "运行后端代码检查..."
-    cd "$BACKEND_DIR" || exit 1
-    if command -v golangci-lint >/dev/null 2>&1; then
-        golangci-lint run ./...
-    else
-        log_warn "golangci-lint 未安装，使用 go vet"
-        go vet ./...
+    local target="${1:-backend}"
+    case "$target" in
+        backend)
+            log_info "运行后端代码检查..."
+            cd "$BACKEND_DIR" || exit 1
+            if command -v golangci-lint >/dev/null 2>&1; then
+                golangci-lint run ./...
+            else
+                log_warn "golangci-lint 未安装，使用 go vet"
+                go vet ./...
+            fi
+            ;;
+        frontend)
+            log_info "运行前端代码检查..."
+            cd "$FRONTEND_DIR" || exit 1
+            pnpm lint
+            ;;
+        all)
+            run_lint backend || return 1
+            run_lint frontend
+            ;;
+        *) log_error "未知目标：lint $target"; return 1 ;;
+    esac
+}
+
+run_format() {
+    local target="${1:-backend}"
+    case "$target" in
+        backend)
+            log_info "格式化后端代码..."
+            cd "$BACKEND_DIR" || exit 1
+            gofmt -w $(find . -name "*.go" -not -path "./pkg/aikit/*")
+            ;;
+        frontend)
+            log_info "格式化前端代码..."
+            cd "$FRONTEND_DIR" || exit 1
+            pnpm format
+            ;;
+        all)
+            run_format backend || return 1
+            run_format frontend
+            ;;
+        *) log_error "未知目标：format $target"; return 1 ;;
+    esac
+}
+
+install_pre_commit() {
+    log_info "安装 pre-commit Git hooks..."
+    if ! command -v pre-commit >/dev/null 2>&1; then
+        log_error "pre-commit 未安装，请执行：pip install pre-commit"
+        return 1
     fi
+    pre-commit install --hook-type pre-commit
+    pre-commit install --hook-type pre-push
+    log_info "pre-commit hooks 安装完成"
 }
 
 run_migrate() {
@@ -348,16 +410,22 @@ case "${1:-}" in
         build_binary || exit 1
         ;;
     test)
-        run_tests
+        run_tests "${2:-backend}"
         ;;
     lint)
-        run_lint
+        run_lint "${2:-backend}"
+        ;;
+    format)
+        run_format "${2:-backend}"
         ;;
     migrate)
         run_migrate
         ;;
     swagger)
         gen_swagger
+        ;;
+    pre-commit-install)
+        install_pre_commit
         ;;
     docker-run)
         docker_stop 2>/dev/null
@@ -380,7 +448,7 @@ case "${1:-}" in
         docker_status
         ;;
     help)
-        echo "用法：$0 {start|stop|restart|install|backend|frontend|build|migrate|test|lint|swagger|docker-*|status|help}"
+        echo "用法：$0 {start|stop|restart|install|backend|frontend|build|migrate|test|lint|format|swagger|pre-commit-install|docker-*|status|help}"
         echo ""
         echo "命令:"
         echo "  start                  启动后端 + 前端"
@@ -390,10 +458,12 @@ case "${1:-}" in
         echo "  backend  start|stop    仅操作后端"
         echo "  frontend start|stop    仅操作前端"
         echo "  build                  编译后端二进制"
-        echo "  test                   运行后端测试"
-        echo "  lint                   后端代码检查"
+        echo "  test   [backend|frontend|all]   运行测试（默认 backend）"
+        echo "  lint   [backend|frontend|all]   代码检查（默认 backend）"
+        echo "  format [backend|frontend|all]   代码格式化（默认 backend）"
         echo "  migrate                执行数据库迁移（golang-migrate）"
         echo "  swagger                生成 Swagger 文档"
+        echo "  pre-commit-install     安装 Git 提交前检查 hooks"
         echo "  docker-build           构建 Docker 镜像"
         echo "  docker-run             Docker 后台运行"
         echo "  docker-debug           Docker 调试模式"

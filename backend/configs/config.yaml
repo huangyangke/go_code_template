@@ -1,20 +1,58 @@
+# 应用配置
 app:
-  family: go-template
+  family: ${APP_FAMILY:go-template}
   host: 0.0.0.0
-  port: 8080
+  port: ${APP_PORT:8080}
 
+# 日志配置
 log:
-  level: info
+  level: ${LOG_LEVEL:info}
   dir: logs
+  stdout: ${LOG_STDOUT:true}    # 生产环境可设 false，只写文件
+  max_log_file: ${LOG_MAX_FILE:10}
+  rotate_size: ${LOG_ROTATE_SIZE:104857600}
 
+# CORS 配置
+cors:
+  allow_origins: ${CORS_ALLOW_ORIGINS:*}
+
+# aikit JWT 鉴权配置
+aikit_auth:
+  enabled: ${AIKIT_AUTH_ENABLED:false}
+  jwt_secret_key: ${AIKIT_AUTH_JWT_SECRET_KEY:change-me-in-production}
+
+# 内部永久 Token（跨服务互调用，生产环境务必设置随机复杂字符串）
+internal_token: ${AIKIT_INTERNAL_TOKEN:}
+
+# 限流配置
+rate_limit:
+  enabled: ${RATE_LIMIT_ENABLED:false}
+  limit: ${RATE_LIMIT_COUNT:100}
+  period: ${RATE_LIMIT_PERIOD:minute}
+
+# MySQL 配置
 mysql:
   dsn: ${MYSQL_DSN}
   max_open_conns: 20
   max_idle_conns: 5
 
+# Redis 配置
 redis:
   addrs:
     - ${REDIS_ADDR:127.0.0.1:6379}
   password: ${REDIS_PASSWORD:}
   db: 0
   type: standalone
+
+# 缓存配置（family 由 FastApp 自动设置）
+cache:
+  default_cache_type: ${CACHE_TYPE:both}
+  default_local_max_size: 1000
+  default_local_ttl: 60
+  default_remote_ttl: 3600
+
+# 异步队列配置
+async_queue:
+  enabled: ${ASYNC_QUEUE_ENABLED:false}
+  group_name: ${ASYNC_QUEUE_GROUP:template_group}
+  consumer_name: ${ASYNC_QUEUE_CONSUMER:template_consumer}

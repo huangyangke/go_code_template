@@ -59,13 +59,6 @@ func (s *ArticleService) Update(ctx context.Context, id uint, req *schema.Update
 	if req.Content != "" {
 		updates["content"] = req.Content
 	}
-	if len(updates) == 0 {
-		article, err := s.repo.GetByID(ctx, id)
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, apperrors.ErrArticleNotFound
-		}
-		return article, err
-	}
 	article, err := s.repo.Update(ctx, id, updates)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, apperrors.ErrArticleNotFound

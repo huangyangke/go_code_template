@@ -1,3 +1,0 @@
-[submodule "backend/pkg/aikit"]
-	path = backend/pkg/aikit
-	url = /data/02_serve/go-aikit

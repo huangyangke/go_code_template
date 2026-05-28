@@ -22,10 +22,11 @@ func (d *ArticleDAO) List(ctx context.Context, offset, limit int) ([]*model.Arti
 	var articles []*model.Article
 	var total int64
 
-	if err := d.db.WithContext(ctx).Model(&model.Article{}).Count(&total).Error; err != nil {
+	base := d.db.WithContext(ctx).Model(&model.Article{})
+	if err := base.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if err := d.db.WithContext(ctx).Offset(offset).Limit(limit).Find(&articles).Error; err != nil {
+	if err := base.Offset(offset).Limit(limit).Find(&articles).Error; err != nil {
 		return nil, 0, err
 	}
 

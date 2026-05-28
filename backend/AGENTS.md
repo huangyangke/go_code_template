@@ -35,22 +35,19 @@ internal/
 ### Handler 层
 
 - 使用 `response.JSONErr(c, data, err)` 统一响应，禁止直接调用 `c.JSON`
-- 参数绑定失败用 `response.ParamError(c)` 或 `response.BadRequest(c)` 返回
-- 路径参数解析错误直接 `response.BadRequest(c)` 返回，不继续处理
-- 只记录非业务错误日志（`errors.As(err, new(*apperrors.AppError))` 为 true 时不打日志）
+- 参数绑定失败用 `response.ParamError(c)` 返回；路径参数解析失败同样用 `response.ParamError(c)`
+- 禁止在 Handler 里打错误日志——`response.JSONErr` 内部已对非业务错误自动记录日志
+- 禁止在 Handler 里用 `errors.As` 判断错误类型——错误分发是 `response.JSONErr` 的职责
 - 新路由在 `internal/api/router.go` 的 `RegisterRoutes` 中注册
 
 ```go
 func (h *ArticleHandler) Get(c *gin.Context) {
     id, err := strconv.ParseUint(c.Param("id"), 10, 64)
     if err != nil {
-        response.BadRequest(c)
+        response.ParamError(c)
         return
     }
     article, err := h.svc.Get(c.Request.Context(), uint(id))
-    if err != nil && !errors.As(err, new(*apperrors.AppError)) {
-        log.Error("get article %d: %v", id, err)
-    }
     response.JSONErr(c, article, err)
 }
 ```

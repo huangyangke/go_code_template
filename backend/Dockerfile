@@ -1,18 +1,19 @@
-FROM golang:1.25-alpine AS builder
+FROM cs-hub.imgo.tv/library/golang:golang1.25 AS builder
 
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
+ENV GOPROXY=https://goproxy.cn,direct
+ENV GO111MODULE=on
+
+WORKDIR /data/app/
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/bin/server ./cmd/server
+RUN go mod download && go mod tidy
+RUN CGO_ENABLED=0 GOOS=linux go build -o /data/app/bin/server ./cmd/server
 
-FROM alpine:3.18
-RUN apk --no-cache add ca-certificates tzdata curl
+FROM cs-hub.imgo.tv/library/centos-hb:v1
 
-WORKDIR /app
-COPY --from=builder /app/bin/server .
-COPY configs/ configs/
+WORKDIR /data/app/
+
+COPY --from=builder /data/app/bin/server /data/app/configs/ ./
 
 ENV APP_ENV=prod
 EXPOSE 8080

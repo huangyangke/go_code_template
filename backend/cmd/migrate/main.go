@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"os"
@@ -19,12 +20,9 @@ func main() {
 		env = "dev"
 	}
 
-	loader, err := config.New("configs/config.yaml",
+	loader := config.MustNew("configs/config.yaml",
 		config.WithEnvFile(fmt.Sprintf("configs/.env.%s", env)),
 	)
-	if err != nil {
-		panic(fmt.Sprintf("load config: %v", err))
-	}
 
 	log.Init(&log.Config{
 		Level:  loader.GetString("log.level", "info"),
@@ -38,8 +36,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	db := dbmysql.New(&dbmysql.Config{DSN: dsn})
-	if err := db.MigrateUp(nil, migrations, "migrations"); err != nil {
+	db := dbmysql.MustNew(&dbmysql.Config{DSN: dsn})
+	if err := db.MigrateUp(context.TODO(), migrations, "migrations"); err != nil {
 		log.Error("migrate failed: %v", err)
 		os.Exit(1)
 	}

@@ -1,0 +1,53 @@
+repos:
+  # Backend: gofmt + golangci-lint（只扫项目代码，排除 pkg/aikit 子模块）
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        entry: bash -c 'cd backend && gofmt -w $(find ./cmd ./internal -name "*.go") || true'
+        language: system
+        files: ^backend/(cmd|internal)/.*\.go$
+        stages: [pre-commit]
+
+      - id: golangci-lint
+        name: golangci-lint
+        entry: bash -c 'cd backend && golangci-lint run ./cmd/... ./internal/...'
+        language: system
+        files: ^backend/(cmd|internal)/.*\.go$
+        pass_filenames: false
+        stages: [pre-commit]
+
+  # Frontend: biome check = format + lint
+  - repo: local
+    hooks:
+      - id: biome-check
+        name: biome check
+        entry: bash -c 'cd frontend && pnpm exec biome check --write --unsafe'
+        language: system
+        files: ^frontend/.*\.(js|jsx|ts|tsx|json|jsonc|css|scss|md)$
+        pass_filenames: false
+        stages: [pre-commit]
+
+  # Tests: run before push
+  - repo: local
+    hooks:
+      - id: backend-tests
+        name: backend go test
+        entry: bash -c 'cd backend && go test ./... -count=1'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: frontend-tests
+        name: frontend vitest
+        entry: bash -c 'cd frontend && pnpm test -- --passWithNoTests'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: frontend-typecheck
+        name: frontend tsc
+        entry: bash -c 'cd frontend && pnpm typecheck'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

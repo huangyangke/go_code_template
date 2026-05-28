@@ -42,7 +42,7 @@ curl http://127.0.0.1:8080/swagger/index.html
 .
 ├── cmd/server/main.go          # 应用入口
 ├── internal/
-│   ├── handler/                # HTTP 层（路由绑定、参数解析、响应）
+│   ├── api/                    # HTTP 层（路由绑定、参数解析、响应）
 │   │   ├── router.go           # 路由注册
 │   │   └── article.go          # 示例 handler
 │   ├── service/                # 业务逻辑层
@@ -67,11 +67,11 @@ curl http://127.0.0.1:8080/swagger/index.html
 
 ## 开发新功能
 
-参考 `internal/handler/article.go` 示例，按以下步骤：
+参考 `internal/api/article.go` 示例，按以下步骤：
 
 1. 在 `internal/model/` 新增数据库模型
 2. 在 `internal/dao/` 新增 DAO（实现 service 层接口）
 3. 在 `internal/service/` 新增 Service（定义接口 + 实现）
 4. 在 `internal/schema/` 新增请求/响应 DTO
-5. 在 `internal/handler/` 新增 Handler
-6. 在 `internal/handler/router.go` 注册路由
+5. 在 `internal/api/` 新增 Handler
+6. 在 `internal/api/router.go` 注册路由

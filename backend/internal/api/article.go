@@ -1,16 +1,13 @@
 package api
 
 import (
-	"errors"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 
-	apperrors "github.com/example/go-template/internal/errors"
 	"github.com/example/go-template/internal/schema"
 	"github.com/example/go-template/internal/service"
 	"github.com/huangyangke/go-aikit/app/response"
-	"github.com/huangyangke/go-aikit/log"
 )
 
 // ArticleHandler handles HTTP requests for articles.
@@ -41,9 +38,6 @@ func (h *ArticleHandler) List(c *gin.Context) {
 	}
 
 	articles, total, err := h.svc.List(c.Request.Context(), page, size)
-	if err != nil {
-		log.Error("list articles: %v", err)
-	}
 	response.JSONErr(c, gin.H{"total": total, "list": articles}, err)
 }
 
@@ -63,9 +57,6 @@ func (h *ArticleHandler) Create(c *gin.Context) {
 	}
 
 	article, err := h.svc.Create(c.Request.Context(), &req)
-	if err != nil {
-		log.Error("create article: %v", err)
-	}
 	response.JSONErr(c, article, err)
 }
 
@@ -79,14 +70,11 @@ func (h *ArticleHandler) Create(c *gin.Context) {
 func (h *ArticleHandler) Get(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		response.BadRequest(c)
+		response.ParamError(c)
 		return
 	}
 
 	article, err := h.svc.Get(c.Request.Context(), uint(id))
-	if err != nil && !errors.As(err, new(*apperrors.AppError)) {
-		log.Error("get article %d: %v", id, err)
-	}
 	response.JSONErr(c, article, err)
 }
 
@@ -102,7 +90,7 @@ func (h *ArticleHandler) Get(c *gin.Context) {
 func (h *ArticleHandler) Update(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		response.BadRequest(c)
+		response.ParamError(c)
 		return
 	}
 
@@ -112,10 +100,12 @@ func (h *ArticleHandler) Update(c *gin.Context) {
 		return
 	}
 
-	article, err := h.svc.Update(c.Request.Context(), uint(id), &req)
-	if err != nil && !errors.As(err, new(*apperrors.AppError)) {
-		log.Error("update article %d: %v", id, err)
+	if req.Title == "" && req.Content == "" {
+		response.ParamError(c)
+		return
 	}
+
+	article, err := h.svc.Update(c.Request.Context(), uint(id), &req)
 	response.JSONErr(c, article, err)
 }
 
@@ -129,13 +119,10 @@ func (h *ArticleHandler) Update(c *gin.Context) {
 func (h *ArticleHandler) Delete(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		response.BadRequest(c)
+		response.ParamError(c)
 		return
 	}
 
 	err = h.svc.Delete(c.Request.Context(), uint(id))
-	if err != nil && !errors.As(err, new(*apperrors.AppError)) {
-		log.Error("delete article %d: %v", id, err)
-	}
 	response.JSONErr(c, nil, err)
 }

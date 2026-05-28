@@ -17,23 +17,26 @@ import (
 )
 
 func main() {
+	// 生产 or 开发环境
 	env := os.Getenv("APP_ENV")
 	if env == "" {
 		env = "dev"
 	}
-
-	loader, err := config.New("configs/config.yaml",
+	// 配置文件
+	loader := config.MustNew("configs/config.yaml",
 		config.WithEnvFile(fmt.Sprintf("configs/.env.%s", env)),
 	)
-	if err != nil {
-		panic(fmt.Sprintf("load config: %v", err))
-	}
-
+	// 服务名称（唯一）
+	family := loader.GetString("app.family", "go-template")
+	// 日志初始化
 	log.Init(&log.Config{
-		Level:  loader.GetString("log.level", "info"),
-		Family: loader.GetString("app.family", "go-template"),
-		Stdout: env != "prod",
-		Dir:    loader.GetString("log.dir", "logs"),
+		Level:      loader.GetString("log.level", "info"),
+		Family:     family,
+		Stdout:     loader.GetBool("log.stdout", env != "prod"),
+		Dir:        loader.GetString("log.dir", "logs"),
+		MaxLogFile: loader.GetInt("log.max_log_file", 10),
+		RotateSize: int64(loader.GetInt("log.rotate_size", 104857600)),
+		// log.InfoCtx(ctx, ...) 日志输出自动携带 task_id
 		WithFields: map[string]log.WithField{
 			"task_id": func(ctx context.Context) map[string]interface{} {
 				if id := middleware.GetTaskID(ctx); id != "" {
@@ -43,9 +46,9 @@ func main() {
 			},
 		},
 	})
-
+	// 初始化app
 	a := app.NewFastApp(app.FastAppConfig{
-		Family: loader.GetString("app.family", "go-template"),
+		Family: family,
 		Host:   loader.GetString("app.host", "0.0.0.0"),
 		Port:   loader.GetInt("app.port", 8080),
 	})
@@ -55,31 +58,20 @@ func main() {
 		EnableRequestLog: true,
 		EnablePrometheus: true,
 		EnableSwagger:    true,
+		CORSConfig: middleware.CORSConfig{
+			AllowOrigins: loader.GetStringSlice("cors.allow_origins"),
+		},
 	})
-
+	// 初始化mysql
 	if loader.GetString("mysql.dsn") != "" {
 		var mysqlCfg dbmysql.Config
-		if err := loader.Scan("mysql", &mysqlCfg); err != nil {
-			panic(fmt.Sprintf("load mysql config: %v", err))
-		}
-		mysqlCfg.Name = "default"
-		mysqlCfg.Fix()
-		if err := mysqlCfg.Validate(); err != nil {
-			panic(err.Error())
-		}
+		loader.MustScan("mysql", &mysqlCfg)
 		a.RegisterMySQL("default", &mysqlCfg)
 	}
-
+	// 初始化redis
 	if len(loader.GetStringSlice("redis.addrs")) > 0 {
 		var redisCfg dbredis.Config
-		if err := loader.Scan("redis", &redisCfg); err != nil {
-			panic(fmt.Sprintf("load redis config: %v", err))
-		}
-		redisCfg.Name = "default"
-		redisCfg.Fix()
-		if err := redisCfg.Validate(); err != nil {
-			panic(err.Error())
-		}
+		loader.MustScan("redis", &redisCfg)
 		a.RegisterRedis("default", &redisCfg)
 	}
 
