@@ -9,15 +9,10 @@
 
 ## 技术栈
 
-- **后端运行时**: Go 1.25+
-- **Web 框架**: Gin
-- **ORM**: GORM (MySQL)
-- **缓存**: Redis (go-redis/v9)
-- **基础设施**: 内置 aikit（`pkg/aikit/`，已随仓库内置；提供配置、日志、缓存、指标、熔断、HTTP 客户端、异步队列、xxl-job 等）
-- **API 文档**: Swagger (swaggo)
-- **数据库迁移**: golang-migrate
-- **前端**: React 19 + React Router v7, SWR, Zustand, Zod, Tailwind CSS v4, shadcn/ui, axios
-- **前端工具**: Vite 8, Biome, Vitest
+- **前端**: React 19, React Router v7, SWR, Zustand, Zod, Tailwind CSS v4, shadcn/ui, axios
+- **后端**: Go 1.25+, Gin, GORM (MySQL), go-redis/v9, aikit (`pkg/aikit/`)
+- **测试工具**: testify, Vitest, agent-browser (基于 playwright)
+- **代码检查**: Biome, golangci-lint
 
 ## 命令
 
