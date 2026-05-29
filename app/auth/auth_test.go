@@ -1,7 +1,6 @@
 package auth_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,11 +15,8 @@ import (
 
 	"github.com/huangyangke/go-aikit/app/auth"
 	"github.com/huangyangke/go-aikit/app/response"
+	"github.com/huangyangke/go-aikit/internal/testutil"
 )
-
-func init() {
-	gin.SetMode(gin.TestMode)
-}
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
 
@@ -77,38 +73,31 @@ func newTestManager(t *testing.T, opts ...func(*auth.Config)) *auth.Manager {
 	return m
 }
 
-func setupRouter(m *auth.Manager) *gin.Engine {
-	r := gin.New()
+func setupRouter(t *testing.T, m *auth.Manager) *gin.Engine {
+	t.Helper()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 	return r
 }
 
 func post(t *testing.T, r *gin.Engine, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
-	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	return w
+	req := testutil.NewJSONRequest(t, http.MethodPost, path, body)
+	return testutil.ServeRequest(r, req)
 }
 
 func get(t *testing.T, r *gin.Engine, path, bearer string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req := testutil.NewJSONRequest(t, http.MethodGet, path, nil)
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	return w
+	return testutil.ServeRequest(r, req)
 }
 
 func decodeBody(t *testing.T, w *httptest.ResponseRecorder) response.APIResponse {
 	t.Helper()
-	var resp response.APIResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	return resp
+	return testutil.ParseJSONResponse[response.APIResponse](t, w)
 }
 
 func dataMap(t *testing.T, resp response.APIResponse) map[string]any {
@@ -123,10 +112,10 @@ func dataMap(t *testing.T, resp response.APIResponse) map[string]any {
 
 func TestLogin_Success(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	resp := decodeBody(t, w)
 	assert.Equal(t, response.CodeSuccess, resp.Code)
 	data := dataMap(t, resp)
@@ -136,25 +125,25 @@ func TestLogin_Success(t *testing.T) {
 
 func TestLogin_InvalidCredentials(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "wrongpass"})
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 	resp := decodeBody(t, w)
 	assert.Equal(t, response.CodeUnauthorized, resp.Code)
 }
 
 func TestLogin_UserNotFound(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "nobody", Password: "TestPass1"})
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 }
 
 func TestMe_WithValidToken(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
 	require.Equal(t, http.StatusOK, w.Code)
@@ -162,29 +151,28 @@ func TestMe_WithValidToken(t *testing.T) {
 	token := data["access_token"].(string)
 
 	w2 := get(t, r, "/auth/me", token)
-	assert.Equal(t, http.StatusOK, w2.Code)
+	testutil.AssertStatus(t, w2, http.StatusOK)
 }
 
 func TestMe_NoToken(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := get(t, r, "/auth/me", "")
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 }
 
 func TestRefresh_Success(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
 	data := dataMap(t, decodeBody(t, w))
 	refreshToken := data["refresh_token"].(string)
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/refresh", nil)
 	req.Header.Set("Authorization", "Bearer "+refreshToken)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req)
-	assert.Equal(t, http.StatusOK, w2.Code)
+	w2 := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w2, http.StatusOK)
 	resp := decodeBody(t, w2)
 	data2 := dataMap(t, resp)
 	assert.NotEmpty(t, data2["access_token"])
@@ -194,17 +182,16 @@ func TestRefresh_Disabled(t *testing.T) {
 	m := newTestManager(t, func(cfg *auth.Config) {
 		cfg.DisableRefresh = true
 	})
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
 	require.Equal(t, http.StatusOK, w.Code)
 	data := dataMap(t, decodeBody(t, w))
 	assert.Empty(t, data["refresh_token"])
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req)
-	assert.Equal(t, http.StatusNotFound, w2.Code)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/refresh", nil)
+	w2 := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w2, http.StatusNotFound)
 }
 
 func TestRefresh_TokenVersionMismatch(t *testing.T) {
@@ -222,41 +209,39 @@ func TestRefresh_TokenVersionMismatch(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
 	require.Equal(t, http.StatusOK, w.Code)
 	data := dataMap(t, decodeBody(t, w))
 	refreshToken := data["refresh_token"].(string)
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/refresh", nil)
 	req.Header.Set("Authorization", "Bearer "+refreshToken)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req)
-	assert.Equal(t, http.StatusUnauthorized, w2.Code)
+	w2 := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w2, http.StatusUnauthorized)
 }
 
 func TestLogout(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
 	data := dataMap(t, decodeBody(t, w))
 	token := data["access_token"].(string)
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/logout", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req)
-	assert.Equal(t, http.StatusOK, w2.Code)
+	w2 := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w2, http.StatusOK)
 }
 
 func TestRegister_Disabled(t *testing.T) {
 	// No UserCreator → register route not mounted
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := post(t, r, "/auth/register", auth.RegisterRequest{Username: "bob", Password: "TestPass1"})
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	testutil.AssertStatus(t, w, http.StatusNotFound)
 }
 
 // ── PasswordPolicy ─────────────────────────────────────────────────────────────
@@ -289,7 +274,7 @@ func TestPasswordPolicy_Special(t *testing.T) {
 
 func TestRequireScopes_Allowed(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	r.GET("/secret", m.AuthRequired(), m.RequireScopes("read"), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
@@ -299,12 +284,12 @@ func TestRequireScopes_Allowed(t *testing.T) {
 	token := data["access_token"].(string)
 
 	w2 := get(t, r, "/secret", token)
-	assert.Equal(t, http.StatusOK, w2.Code)
+	testutil.AssertStatus(t, w2, http.StatusOK)
 }
 
 func TestRequireScopes_Forbidden(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	r.GET("/admin", m.AuthRequired(), m.RequireScopes("admin"), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
@@ -314,7 +299,7 @@ func TestRequireScopes_Forbidden(t *testing.T) {
 	token := data["access_token"].(string)
 
 	w2 := get(t, r, "/admin", token)
-	assert.Equal(t, http.StatusForbidden, w2.Code)
+	testutil.AssertStatus(t, w2, http.StatusForbidden)
 }
 
 // ── BcryptHasher ──────────────────────────────────────────────────────────────
@@ -357,7 +342,7 @@ func TestNewFromService_GetSubject_AutoInjected(t *testing.T) {
 	m := newTestManager(t, func(cfg *auth.Config) {
 		cfg.GetSubject = nil // ensure it gets injected
 	})
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
 	require.Equal(t, http.StatusOK, w.Code)
@@ -366,7 +351,7 @@ func TestNewFromService_GetSubject_AutoInjected(t *testing.T) {
 
 	// /auth/me only works when GetSubject was injected
 	w2 := get(t, r, "/auth/me", token)
-	assert.Equal(t, http.StatusOK, w2.Code)
+	testutil.AssertStatus(t, w2, http.StatusOK)
 }
 
 type fakeCreatorService struct {
@@ -396,39 +381,36 @@ func TestNewFromService_UserCreator_AutoInjected(t *testing.T) {
 		Secret: "test-secret-key-32-bytes-long!!!",
 	})
 	require.NoError(t, err)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	w := post(t, r, "/auth/register", auth.RegisterRequest{Username: "newuser", Password: "TestPass1"})
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 // ── applyDefaults via New ─────────────────────────────────────────────────────
 
 func TestApplyDefaults_DisableRefresh(t *testing.T) {
 	m := newTestManager(t, func(cfg *auth.Config) { cfg.DisableRefresh = true })
-	r := setupRouter(m)
-	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	r := setupRouter(t, m)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/refresh", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusNotFound)
 }
 
 func TestApplyDefaults_DisableLogout(t *testing.T) {
 	m := newTestManager(t, func(cfg *auth.Config) { cfg.DisableLogout = true })
-	r := setupRouter(m)
-	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	r := setupRouter(t, m)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/logout", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusNotFound)
 }
 
 func TestApplyDefaults_AllowLogoutWithoutToken(t *testing.T) {
 	m := newTestManager(t, func(cfg *auth.Config) { cfg.AllowLogoutWithoutToken = true })
-	r := setupRouter(m)
-	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	r := setupRouter(t, m)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/logout", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 // ── Prefix ────────────────────────────────────────────────────────────────────
@@ -452,26 +434,25 @@ func TestPrefix_Custom(t *testing.T) {
 
 func TestAuthRequired_NoToken_401(t *testing.T) {
 	m := newTestManager(t)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.GET("/protected", m.AuthRequired(), func(c *gin.Context) { c.Status(http.StatusOK) })
 	w := get(t, r, "/protected", "")
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 }
 
 func TestAuthRequired_BadFormat_401(t *testing.T) {
 	m := newTestManager(t)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.GET("/protected", m.AuthRequired(), func(c *gin.Context) { c.Status(http.StatusOK) })
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req := testutil.NewJSONRequest(t, http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "Token badtoken")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 }
 
 func TestAuthRequired_ValidToken_SetsUID(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	var gotUID string
 	r.GET("/whoami", m.AuthRequired(), func(c *gin.Context) {
 		gotUID = auth.GetUID(c)
@@ -502,27 +483,23 @@ func TestAuthRequired_RevokedToken_401(t *testing.T) {
 		UseJTI: true,
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 	r.GET("/protected", m.AuthRequired(), func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	// login
-	b, _ := json.Marshal(auth.LoginRequest{Username: "u", Password: "p"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/login", auth.LoginRequest{Username: "u", Password: "p"})
+	w := testutil.ServeRequest(r, req)
 	token := dataMap(t, decodeBody(t, w))["access_token"].(string)
 
 	// logout (revokes token)
-	req2 := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	req2 := testutil.NewJSONRequest(t, http.MethodPost, "/auth/logout", nil)
 	req2.Header.Set("Authorization", "Bearer "+token)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req2)
+	_ = testutil.ServeRequest(r, req2)
 
 	// access with revoked token
 	w3 := get(t, r, "/protected", token)
-	assert.Equal(t, http.StatusUnauthorized, w3.Code)
+	testutil.AssertStatus(t, w3, http.StatusUnauthorized)
 }
 
 func TestAuthRequired_TokenVersionMismatch_401(t *testing.T) {
@@ -536,34 +513,30 @@ func TestAuthRequired_TokenVersionMismatch_401(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 	r.GET("/protected", m.AuthRequired(), func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	b, _ := json.Marshal(auth.LoginRequest{Username: "u", Password: "p"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/login", auth.LoginRequest{Username: "u", Password: "p"})
+	w := testutil.ServeRequest(r, req)
 	token := dataMap(t, decodeBody(t, w))["access_token"].(string)
 
 	w2 := get(t, r, "/protected", token)
-	assert.Equal(t, http.StatusUnauthorized, w2.Code)
+	testutil.AssertStatus(t, w2, http.StatusUnauthorized)
 }
 
 func TestAuthRequired_CookieFallback(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	r.GET("/protected", m.AuthRequired(), func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
 	token := dataMap(t, decodeBody(t, w))["access_token"].(string)
 
-	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req := testutil.NewJSONRequest(t, http.MethodGet, "/protected", nil)
 	req.AddCookie(&http.Cookie{Name: "access_token", Value: token})
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req)
-	assert.Equal(t, http.StatusOK, w2.Code)
+	w2 := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w2, http.StatusOK)
 }
 
 // ── handleRegister ────────────────────────────────────────────────────────────
@@ -588,9 +561,9 @@ func newCreatorManager(t *testing.T, opts ...func(*auth.Config)) *auth.Manager {
 
 func TestHandleRegister_Success(t *testing.T) {
 	m := newCreatorManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := post(t, r, "/auth/register", auth.RegisterRequest{Username: "newuser", Password: "TestPass1"})
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	data := dataMap(t, decodeBody(t, w))
 	assert.NotEmpty(t, data["uid"])
 }
@@ -599,49 +572,47 @@ func TestHandleRegister_PasswordPolicy_Fail(t *testing.T) {
 	m := newCreatorManager(t, func(cfg *auth.Config) {
 		cfg.PasswordPolicy = auth.DefaultPasswordPolicy()
 	})
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := post(t, r, "/auth/register", auth.RegisterRequest{Username: "newuser", Password: "weak"})
-	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	testutil.AssertStatus(t, w, http.StatusUnprocessableEntity)
 }
 
 func TestHandleRegister_AutoLogin(t *testing.T) {
 	m := newCreatorManager(t, func(cfg *auth.Config) {
 		cfg.AutoLoginAfterRegister = true
 	})
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := post(t, r, "/auth/register", auth.RegisterRequest{Username: "newuser", Password: "TestPass1"})
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	data := dataMap(t, decodeBody(t, w))
 	assert.NotEmpty(t, data["access_token"])
 }
 
 func TestHandleRegister_BindError(t *testing.T) {
 	m := newCreatorManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader("{bad"))
 	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusUnprocessableEntity)
 }
 
 // ── handleLogin branches ──────────────────────────────────────────────────────
 
 func TestHandleLogin_BindError(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader("{bad"))
 	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusUnprocessableEntity)
 }
 
 func TestHandleLogin_SetCookies(t *testing.T) {
 	m := newTestManager(t, func(cfg *auth.Config) { cfg.SetCookies = true })
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	assert.NotEmpty(t, w.Header().Get("Set-Cookie"))
 }
 
@@ -656,70 +627,62 @@ func TestHandleRefresh_IsTokenRevoked_True(t *testing.T) {
 		IsTokenRevoked: func(ctx context.Context, key string) (bool, error) { return true, nil },
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	b, _ := json.Marshal(auth.LoginRequest{Username: "u", Password: "p"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/login", auth.LoginRequest{Username: "u", Password: "p"})
+	w := testutil.ServeRequest(r, req)
 	refreshToken := dataMap(t, decodeBody(t, w))["refresh_token"].(string)
 
-	req2 := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	req2 := testutil.NewJSONRequest(t, http.MethodPost, "/auth/refresh", nil)
 	req2.Header.Set("Authorization", "Bearer "+refreshToken)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req2)
-	assert.Equal(t, http.StatusUnauthorized, w2.Code)
+	w2 := testutil.ServeRequest(r, req2)
+	testutil.AssertStatus(t, w2, http.StatusUnauthorized)
 }
 
 func TestHandleRefresh_SetCookies(t *testing.T) {
 	m := newTestManager(t, func(cfg *auth.Config) { cfg.SetCookies = true })
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
 	refreshToken := dataMap(t, decodeBody(t, w))["refresh_token"].(string)
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/refresh", nil)
 	req.Header.Set("Authorization", "Bearer "+refreshToken)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req)
-	assert.Equal(t, http.StatusOK, w2.Code)
+	w2 := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w2, http.StatusOK)
 	assert.NotEmpty(t, w2.Header().Get("Set-Cookie"))
 }
 
 func TestHandleRefresh_NoToken(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
-	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	r := setupRouter(t, m)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/refresh", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 }
 
 func TestHandleRefresh_CookieFallback(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
 	refreshToken := dataMap(t, decodeBody(t, w))["refresh_token"].(string)
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/refresh", nil)
 	req.AddCookie(&http.Cookie{Name: "refresh_token", Value: refreshToken})
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req)
-	assert.Equal(t, http.StatusOK, w2.Code)
+	w2 := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w2, http.StatusOK)
 }
 
 // ── handleLogout branches ─────────────────────────────────────────────────────
 
 func TestHandleLogout_RequireToken_NoToken_401(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
-	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	r := setupRouter(t, m)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/logout", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 }
 
 func TestHandleLogout_WithRevokeToken(t *testing.T) {
@@ -735,21 +698,17 @@ func TestHandleLogout_WithRevokeToken(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	b, _ := json.Marshal(auth.LoginRequest{Username: "u", Password: "p"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/login", auth.LoginRequest{Username: "u", Password: "p"})
+	w := testutil.ServeRequest(r, req)
 	token := dataMap(t, decodeBody(t, w))["access_token"].(string)
 
-	req2 := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	req2 := testutil.NewJSONRequest(t, http.MethodPost, "/auth/logout", nil)
 	req2.Header.Set("Authorization", "Bearer "+token)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req2)
-	assert.Equal(t, http.StatusOK, w2.Code)
+	w2 := testutil.ServeRequest(r, req2)
+	testutil.AssertStatus(t, w2, http.StatusOK)
 	assert.NotEmpty(t, revoked)
 }
 
@@ -758,11 +717,10 @@ func TestHandleLogout_SetCookies_ClearCookies(t *testing.T) {
 		cfg.SetCookies = true
 		cfg.AllowLogoutWithoutToken = true
 	})
-	r := setupRouter(m)
-	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	r := setupRouter(t, m)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/logout", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	cookies := w.Header().Get("Set-Cookie")
 	assert.Contains(t, cookies, "access_token")
 }
@@ -780,18 +738,15 @@ func TestHandleMe_GetSubject_NotFound(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	b, _ := json.Marshal(auth.LoginRequest{Username: "u", Password: "p"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/login", auth.LoginRequest{Username: "u", Password: "p"})
+	w := testutil.ServeRequest(r, req)
 	token := dataMap(t, decodeBody(t, w))["access_token"].(string)
 
 	w2 := get(t, r, "/auth/me", token)
-	assert.Equal(t, http.StatusNotFound, w2.Code)
+	testutil.AssertStatus(t, w2, http.StatusNotFound)
 }
 
 func TestHandleMe_GetSubject_Error(t *testing.T) {
@@ -805,18 +760,15 @@ func TestHandleMe_GetSubject_Error(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	b, _ := json.Marshal(auth.LoginRequest{Username: "u", Password: "p"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/login", auth.LoginRequest{Username: "u", Password: "p"})
+	w := testutil.ServeRequest(r, req)
 	token := dataMap(t, decodeBody(t, w))["access_token"].(string)
 
 	w2 := get(t, r, "/auth/me", token)
-	assert.Equal(t, http.StatusInternalServerError, w2.Code)
+	testutil.AssertStatus(t, w2, http.StatusInternalServerError)
 }
 
 // ── jwt helpers ───────────────────────────────────────────────────────────────
@@ -836,21 +788,17 @@ func TestRevocationKey_WithJTI(t *testing.T) {
 		UseJTI: true,
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	b, _ := json.Marshal(auth.LoginRequest{Username: "u", Password: "p"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/login", auth.LoginRequest{Username: "u", Password: "p"})
+	w := testutil.ServeRequest(r, req)
 	token := dataMap(t, decodeBody(t, w))["access_token"].(string)
 
-	req2 := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	req2 := testutil.NewJSONRequest(t, http.MethodPost, "/auth/logout", nil)
 	req2.Header.Set("Authorization", "Bearer "+token)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req2)
-	assert.Equal(t, http.StatusOK, w2.Code)
+	w2 := testutil.ServeRequest(r, req2)
+	testutil.AssertStatus(t, w2, http.StatusOK)
 
 	// revoked key should be a UUID (JTI), not a sha256 hash
 	for key := range revoked {
@@ -873,21 +821,17 @@ func TestRevocationKey_WithoutJTI_UsesSHA256(t *testing.T) {
 		UseJTI: false, // access token has no JTI
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	b, _ := json.Marshal(auth.LoginRequest{Username: "u", Password: "p"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/login", auth.LoginRequest{Username: "u", Password: "p"})
+	w := testutil.ServeRequest(r, req)
 	token := dataMap(t, decodeBody(t, w))["access_token"].(string)
 
-	req2 := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	req2 := testutil.NewJSONRequest(t, http.MethodPost, "/auth/logout", nil)
 	req2.Header.Set("Authorization", "Bearer "+token)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req2)
-	assert.Equal(t, http.StatusOK, w2.Code)
+	w2 := testutil.ServeRequest(r, req2)
+	testutil.AssertStatus(t, w2, http.StatusOK)
 
 	// revoked key should be hex-encoded SHA256 (64 chars)
 	for key := range revoked {
@@ -897,22 +841,22 @@ func TestRevocationKey_WithoutJTI_UsesSHA256(t *testing.T) {
 
 func TestIssueTokenBundle_NoRefresh(t *testing.T) {
 	m := newTestManager(t, func(cfg *auth.Config) { cfg.DisableRefresh = true })
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	data := dataMap(t, decodeBody(t, w))
 	assert.Empty(t, data["refresh_token"])
 }
 
 func TestParseToken_AlgorithmConfusion(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	r.GET("/protected", m.AuthRequired(), func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	// craft a token with "none" algorithm
 	fakeToken := "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiIxIn0."
 	w := get(t, r, "/protected", fakeToken)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 }
 
 // ── checkRevocation error path ────────────────────────────────────────────────
@@ -928,19 +872,16 @@ func TestCheckRevocation_Error_401(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 	r.GET("/protected", m.AuthRequired(), func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	b, _ := json.Marshal(auth.LoginRequest{Username: "u", Password: "p"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/login", auth.LoginRequest{Username: "u", Password: "p"})
+	w := testutil.ServeRequest(r, req)
 	token := dataMap(t, decodeBody(t, w))["access_token"].(string)
 
 	w2 := get(t, r, "/protected", token)
-	assert.Equal(t, http.StatusUnauthorized, w2.Code)
+	testutil.AssertStatus(t, w2, http.StatusUnauthorized)
 }
 
 // ── fetchJSON ─────────────────────────────────────────────────────────────────
@@ -958,18 +899,15 @@ func TestHandleMe_via_FetchJSON_non200(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	b, _ := json.Marshal(auth.LoginRequest{Username: "u", Password: "p"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/login", auth.LoginRequest{Username: "u", Password: "p"})
+	w := testutil.ServeRequest(r, req)
 	token := dataMap(t, decodeBody(t, w))["access_token"].(string)
 
 	w2 := get(t, r, "/auth/me", token)
-	assert.Equal(t, http.StatusInternalServerError, w2.Code)
+	testutil.AssertStatus(t, w2, http.StatusInternalServerError)
 }
 
 // ── OAuth state helpers ───────────────────────────────────────────────────────
@@ -1001,13 +939,12 @@ func newOAuthManager(t *testing.T) *auth.Manager {
 
 func TestOAuth_handleAuthorize_Redirects(t *testing.T) {
 	m := newOAuthManager(t)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth/testprovider", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusFound, w.Code)
+	req := testutil.NewJSONRequest(t, http.MethodGet, "/auth/oauth/testprovider", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusFound)
 	assert.Contains(t, w.Header().Get("Location"), "example.com/auth")
 }
 
@@ -1026,51 +963,47 @@ func TestOAuth_handleAuthorize_UnknownProvider_500(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth/broken", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	req := testutil.NewJSONRequest(t, http.MethodGet, "/auth/oauth/broken", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusInternalServerError)
 }
 
 func TestOAuth_handleCallback_MissingCode_400(t *testing.T) {
 	m := newOAuthManager(t)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth/testprovider/callback?state=somestate", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	req := testutil.NewJSONRequest(t, http.MethodGet, "/auth/oauth/testprovider/callback?state=somestate", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusBadRequest)
 }
 
 func TestOAuth_handleCallback_ErrorParam_400(t *testing.T) {
 	m := newOAuthManager(t)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth/testprovider/callback?error=access_denied", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	req := testutil.NewJSONRequest(t, http.MethodGet, "/auth/oauth/testprovider/callback?error=access_denied", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusBadRequest)
 }
 
 func TestOAuth_handleCallback_BadState_400(t *testing.T) {
 	m := newOAuthManager(t)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth/testprovider/callback?code=abc&state=invalidsig", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	req := testutil.NewJSONRequest(t, http.MethodGet, "/auth/oauth/testprovider/callback?code=abc&state=invalidsig", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusBadRequest)
 }
 
 func TestNormalizeGoogle(t *testing.T) {
 	m := newOAuthManager(t)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
 	// Verify authorize redirect contains google-specific params by using builtin google provider
@@ -1149,11 +1082,11 @@ func TestIssueTokenBundle_UseSID(t *testing.T) {
 		UseSID: true,
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "u", Password: "p"})
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	data := dataMap(t, decodeBody(t, w))
 	assert.NotEmpty(t, data["access_token"])
 }
@@ -1173,9 +1106,9 @@ func TestNewFromService_GetTokenVersion_Error(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	testutil.AssertStatus(t, w, http.StatusInternalServerError)
 }
 
 // ── NewFromService: GetUserByID returns nil ───────────────────────────────────
@@ -1189,15 +1122,12 @@ func TestNewFromService_GetUserByID_Nil(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
-	b, _ := json.Marshal(auth.LoginRequest{Username: "missing", Password: "p"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/login", auth.LoginRequest{Username: "missing", Password: "p"})
+	w := testutil.ServeRequest(r, req)
 	// /auth/me would fail but login succeeds
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 // ── handleLogin: OnLoginAttempt error ────────────────────────────────────────
@@ -1209,9 +1139,9 @@ func TestHandleLogin_OnLoginAttempt_Error(t *testing.T) {
 			return errors.New("rate limited")
 		}
 	})
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
-	assert.Equal(t, http.StatusTooManyRequests, w.Code)
+	testutil.AssertStatus(t, w, http.StatusTooManyRequests)
 }
 
 // ── handleRegister: OnRegisterAttempt error ───────────────────────────────────
@@ -1223,9 +1153,9 @@ func TestHandleRegister_OnRegisterAttempt_Error(t *testing.T) {
 			return errors.New("forbidden")
 		}
 	})
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := post(t, r, "/auth/register", auth.RegisterRequest{Username: "new", Password: "TestPass1"})
-	assert.Equal(t, http.StatusForbidden, w.Code)
+	testutil.AssertStatus(t, w, http.StatusForbidden)
 }
 
 // ── handleRegister: ErrUserAlreadyExists ──────────────────────────────────────
@@ -1248,9 +1178,9 @@ func TestHandleRegister_ErrUserAlreadyExists(t *testing.T) {
 	}
 	m, err := auth.NewFromService(svc, auth.Config{Secret: "test-secret-key-32-bytes-long!!!"})
 	require.NoError(t, err)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := post(t, r, "/auth/register", auth.RegisterRequest{Username: "new", Password: "TestPass1"})
-	assert.Equal(t, http.StatusConflict, w.Code)
+	testutil.AssertStatus(t, w, http.StatusConflict)
 }
 
 // ── handleRegister: RegisterUser internal error ───────────────────────────────
@@ -1273,9 +1203,9 @@ func TestHandleRegister_InternalError(t *testing.T) {
 	}
 	m, err := auth.NewFromService(svc, auth.Config{Secret: "test-secret-key-32-bytes-long!!!"})
 	require.NoError(t, err)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := post(t, r, "/auth/register", auth.RegisterRequest{Username: "new", Password: "TestPass1"})
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	testutil.AssertStatus(t, w, http.StatusInternalServerError)
 }
 
 // ── handleRefresh: RefreshRotation + RevokeBySID ─────────────────────────────
@@ -1298,21 +1228,17 @@ func TestHandleRefresh_RefreshRotation_RevokeBySID(t *testing.T) {
 		OnTokenReuse: func(c *gin.Context, uid string) {},
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	b, _ := json.Marshal(auth.LoginRequest{Username: "u", Password: "p"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/login", auth.LoginRequest{Username: "u", Password: "p"})
+	w := testutil.ServeRequest(r, req)
 	refreshToken := dataMap(t, decodeBody(t, w))["refresh_token"].(string)
 
-	req2 := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	req2 := testutil.NewJSONRequest(t, http.MethodPost, "/auth/refresh", nil)
 	req2.Header.Set("Authorization", "Bearer "+refreshToken)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req2)
-	assert.Equal(t, http.StatusUnauthorized, w2.Code)
+	w2 := testutil.ServeRequest(r, req2)
+	testutil.AssertStatus(t, w2, http.StatusUnauthorized)
 	assert.True(t, len(revokedBySID) > 0, "RevokeBySID should have been called")
 }
 
@@ -1330,7 +1256,7 @@ func TestHandleMe_EmptyUID(t *testing.T) {
 	})
 	require.NoError(t, err)
 	// Call handleMe without going through AuthRequired (uid will be empty)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 	r.GET("/noauth/me", func(c *gin.Context) {
 		// uid not set → GetUID returns ""
@@ -1381,14 +1307,13 @@ func TestFetchJSON_Non200(t *testing.T) {
 
 func TestOAuth_verifyState_InvalidFormat(t *testing.T) {
 	m := newOAuthManager(t)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
 	// No dot in state → invalid format
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth/testprovider/callback?code=abc&state=nodot", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	req := testutil.NewJSONRequest(t, http.MethodGet, "/auth/oauth/testprovider/callback?code=abc&state=nodot", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusBadRequest)
 }
 
 func TestOAuth_resolveProvider_UnknownWithMissingURLs(t *testing.T) {
@@ -1408,13 +1333,12 @@ func TestOAuth_resolveProvider_UnknownWithMissingURLs(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth/unknown-provider", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	req := testutil.NewJSONRequest(t, http.MethodGet, "/auth/oauth/unknown-provider", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusInternalServerError)
 }
 
 // ── setCookies / clearCookies via SetCookies=true ─────────────────────────────
@@ -1424,17 +1348,17 @@ func TestSetCookies_And_ClearCookies(t *testing.T) {
 		cfg.SetCookies = true
 		cfg.AllowLogoutWithoutToken = true
 	})
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	// Login sets cookies
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	setCookie := w.Header().Get("Set-Cookie")
 	assert.Contains(t, setCookie, "access_token")
 
 	// Logout clears cookies
 	w2 := post(t, r, "/auth/logout", nil)
-	assert.Equal(t, http.StatusOK, w2.Code)
+	testutil.AssertStatus(t, w2, http.StatusOK)
 	clearCookie := w2.Header().Get("Set-Cookie")
 	assert.Contains(t, clearCookie, "access_token")
 }
@@ -1447,9 +1371,9 @@ func TestNewFromService_GetUserByUsername_UnknownError(t *testing.T) {
 		Secret: "test-secret-key-32-bytes-long!!!",
 	})
 	require.NoError(t, err)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	testutil.AssertStatus(t, w, http.StatusInternalServerError)
 }
 
 type errorUserService struct{}
@@ -1470,9 +1394,9 @@ func TestNewFromService_GetUserByUsername_NilUser(t *testing.T) {
 		Secret: "test-secret-key-32-bytes-long!!!",
 	})
 	require.NoError(t, err)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 }
 
 type nilUserService struct{}
@@ -1499,7 +1423,7 @@ func TestHandleRegister_WithEmailAndDisplayName(t *testing.T) {
 		Secret: "test-secret-key-32-bytes-long!!!",
 	})
 	require.NoError(t, err)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	email := "new@example.com"
 	displayName := "New User"
@@ -1509,12 +1433,9 @@ func TestHandleRegister_WithEmailAndDisplayName(t *testing.T) {
 		"email":        email,
 		"display_name": displayName,
 	}
-	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/register", body)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 // ── handleRefresh: AutoLoginAfterRegister sets cookies ───────────────────────
@@ -1524,9 +1445,9 @@ func TestHandleRegister_AutoLogin_SetCookies(t *testing.T) {
 		cfg.AutoLoginAfterRegister = true
 		cfg.SetCookies = true
 	})
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 	w := post(t, r, "/auth/register", auth.RegisterRequest{Username: "newuser", Password: "TestPass1"})
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	assert.NotEmpty(t, w.Header().Get("Set-Cookie"))
 }
 
@@ -1534,16 +1455,15 @@ func TestHandleRegister_AutoLogin_SetCookies(t *testing.T) {
 
 func TestHandleRefresh_AccessTokenUsed_401(t *testing.T) {
 	m := newTestManager(t)
-	r := setupRouter(m)
+	r := setupRouter(t, m)
 
 	w := post(t, r, "/auth/login", auth.LoginRequest{Username: "alice", Password: "TestPass1"})
 	token := dataMap(t, decodeBody(t, w))["access_token"].(string)
 
-	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/refresh", nil)
 	req.Header.Set("Authorization", "Bearer "+token) // access token, not refresh
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req)
-	assert.Equal(t, http.StatusUnauthorized, w2.Code)
+	w2 := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w2, http.StatusUnauthorized)
 }
 
 // ── handleRefresh: GetTokenVersion error ─────────────────────────────────────
@@ -1559,22 +1479,18 @@ func TestHandleRefresh_GetTokenVersionError(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	b, _ := json.Marshal(auth.LoginRequest{Username: "u", Password: "p"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/login", auth.LoginRequest{Username: "u", Password: "p"})
+	w := testutil.ServeRequest(r, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
 	refreshToken := dataMap(t, decodeBody(t, w))["refresh_token"].(string)
-	req2 := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	req2 := testutil.NewJSONRequest(t, http.MethodPost, "/auth/refresh", nil)
 	req2.Header.Set("Authorization", "Bearer "+refreshToken)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req2)
-	assert.Equal(t, http.StatusInternalServerError, w2.Code) // GetTokenVersion error → 500
+	w2 := testutil.ServeRequest(r, req2)
+	testutil.AssertStatus(t, w2, http.StatusInternalServerError) // GetTokenVersion error → 500
 }
 
 // ── handleRefresh: RefreshRotation with RevokeToken ──────────────────────────
@@ -1594,21 +1510,17 @@ func TestHandleRefresh_RefreshRotation_RevokesOldToken(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	b, _ := json.Marshal(auth.LoginRequest{Username: "u", Password: "p"})
-	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodPost, "/auth/login", auth.LoginRequest{Username: "u", Password: "p"})
+	w := testutil.ServeRequest(r, req)
 	refreshToken := dataMap(t, decodeBody(t, w))["refresh_token"].(string)
 
-	req2 := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
+	req2 := testutil.NewJSONRequest(t, http.MethodPost, "/auth/refresh", nil)
 	req2.Header.Set("Authorization", "Bearer "+refreshToken)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req2)
-	assert.Equal(t, http.StatusOK, w2.Code)
+	w2 := testutil.ServeRequest(r, req2)
+	testutil.AssertStatus(t, w2, http.StatusOK)
 	assert.NotEmpty(t, revoked, "old refresh token should have been revoked")
 }
 
@@ -1626,12 +1538,12 @@ func TestHandleMe_NoAuthRequired_EmptyUID_401(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 	// Add a route that calls /auth/me handler without going through AuthRequired
 	// We simulate this by hitting /auth/me without a token
 	w := get(t, r, "/auth/me", "")
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 }
 
 // ── fetchJSON: success path ────────────────────────────────────────────────────
@@ -1666,13 +1578,12 @@ func TestFetchJSON_Success(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth/myprovider", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusFound, w.Code)
+	req := testutil.NewJSONRequest(t, http.MethodGet, "/auth/oauth/myprovider", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusFound)
 }
 
 // ── oauth: resolveProvider merges builtin fields ──────────────────────────────
@@ -1696,13 +1607,12 @@ func TestOAuth_resolveProvider_GoogleBuiltin_Merged(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	m.RegisterRoutes(r)
 
-	req := httptest.NewRequest(http.MethodGet, "/auth/oauth/google", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	req := testutil.NewJSONRequest(t, http.MethodGet, "/auth/oauth/google", nil)
+	w := testutil.ServeRequest(r, req)
 	// Should redirect to Google's auth URL
-	assert.Equal(t, http.StatusFound, w.Code)
+	testutil.AssertStatus(t, w, http.StatusFound)
 	assert.Contains(t, w.Header().Get("Location"), "accounts.google.com")
 }

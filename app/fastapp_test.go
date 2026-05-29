@@ -20,6 +20,7 @@ import (
 	dbmysql "github.com/huangyangke/go-aikit/database/mysql"
 	dbpulsar "github.com/huangyangke/go-aikit/database/pulsar"
 	dbredis "github.com/huangyangke/go-aikit/database/redis"
+	"github.com/huangyangke/go-aikit/internal/testutil"
 )
 
 func TestNewFastApp(t *testing.T) {
@@ -87,10 +88,9 @@ func TestFastApp_BuildMiddlewareBeforeRoutes(t *testing.T) {
 	fa.registerBuiltinEndpoints()
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	w := httptest.NewRecorder()
-	fa.Engine().ServeHTTP(w, req)
+	w := testutil.ServeRequest(fa.Engine(), req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	assert.NotEmpty(t, w.Header().Get("X-Request-ID"))
 }
 
@@ -100,10 +100,9 @@ func TestFastApp_HealthCheck_NoInstances(t *testing.T) {
 	fa.registerBuiltinEndpoints()
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	w := httptest.NewRecorder()
-	fa.Engine().ServeHTTP(w, req)
+	w := testutil.ServeRequest(fa.Engine(), req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	// Response should contain health status structure
 	assert.Contains(t, w.Body.String(), "healthy")
 }
@@ -116,10 +115,9 @@ func TestFastApp_PprofEnabled(t *testing.T) {
 	fa.registerBuiltinEndpoints()
 
 	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
-	w := httptest.NewRecorder()
-	fa.Engine().ServeHTTP(w, req)
+	w := testutil.ServeRequest(fa.Engine(), req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 func TestFastApp_PprofDisabled(t *testing.T) {
@@ -130,10 +128,9 @@ func TestFastApp_PprofDisabled(t *testing.T) {
 	fa.registerBuiltinEndpoints()
 
 	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
-	w := httptest.NewRecorder()
-	fa.Engine().ServeHTTP(w, req)
+	w := testutil.ServeRequest(fa.Engine(), req)
 
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	testutil.AssertStatus(t, w, http.StatusNotFound)
 }
 
 func TestFastApp_SwaggerEnabled(t *testing.T) {
@@ -144,11 +141,10 @@ func TestFastApp_SwaggerEnabled(t *testing.T) {
 	fa.registerBuiltinEndpoints()
 
 	req := httptest.NewRequest(http.MethodGet, "/swagger/index.html", nil)
-	w := httptest.NewRecorder()
-	fa.Engine().ServeHTTP(w, req)
+	w := testutil.ServeRequest(fa.Engine(), req)
 
 	// Swagger returns 200 even without doc files (renders UI)
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 func TestFastApp_SwaggerDisabled(t *testing.T) {
@@ -159,10 +155,9 @@ func TestFastApp_SwaggerDisabled(t *testing.T) {
 	fa.registerBuiltinEndpoints()
 
 	req := httptest.NewRequest(http.MethodGet, "/swagger/index.html", nil)
-	w := httptest.NewRecorder()
-	fa.Engine().ServeHTTP(w, req)
+	w := testutil.ServeRequest(fa.Engine(), req)
 
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	testutil.AssertStatus(t, w, http.StatusNotFound)
 }
 
 func TestFastApp_Pulsar_NotRegistered(t *testing.T) {
@@ -216,10 +211,9 @@ func TestFastApp_BuildMiddlewareChain_RequestID(t *testing.T) {
 	fa.registerBuiltinEndpoints()
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	w := httptest.NewRecorder()
-	fa.Engine().ServeHTTP(w, req)
+	w := testutil.ServeRequest(fa.Engine(), req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	assert.NotEmpty(t, w.Header().Get("X-Request-ID"))
 }
 
@@ -242,16 +236,14 @@ func TestFastApp_BuildMiddlewareChain_TokenAuth_Whitelist(t *testing.T) {
 	})
 
 	// Whitelisted path should pass without token
-	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/public/resource", nil)
-	fa.Engine().ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	w := testutil.ServeRequest(fa.Engine(), req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 
 	// Non-whitelisted path without token should return 401
-	w2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodGet, "/secret", nil)
-	fa.Engine().ServeHTTP(w2, req2)
-	assert.Equal(t, http.StatusUnauthorized, w2.Code)
+	w2 := testutil.ServeRequest(fa.Engine(), req2)
+	testutil.AssertStatus(t, w2, http.StatusUnauthorized)
 }
 
 func TestFastApp_BuildMiddlewareChain_TokenAuth_InternalToken(t *testing.T) {
@@ -267,17 +259,15 @@ func TestFastApp_BuildMiddlewareChain_TokenAuth_InternalToken(t *testing.T) {
 	})
 
 	// Request with internal token should pass
-	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
 	req.Header.Set("Authorization", "Bearer my-internal-secret")
-	fa.Engine().ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	w := testutil.ServeRequest(fa.Engine(), req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 
 	// Request without token should fail
-	w2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodGet, "/api/data", nil)
-	fa.Engine().ServeHTTP(w2, req2)
-	assert.Equal(t, http.StatusUnauthorized, w2.Code)
+	w2 := testutil.ServeRequest(fa.Engine(), req2)
+	testutil.AssertStatus(t, w2, http.StatusUnauthorized)
 }
 
 func TestFastApp_BuildMiddlewareChain_TokenAuth_ExtraVerifyFunc(t *testing.T) {
@@ -298,18 +288,16 @@ func TestFastApp_BuildMiddlewareChain_TokenAuth_ExtraVerifyFunc(t *testing.T) {
 	})
 
 	// Token accepted by extra verifier should succeed (OR logic)
-	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "Bearer extra-token")
-	fa.Engine().ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	w := testutil.ServeRequest(fa.Engine(), req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 
 	// Token rejected by both verifiers should fail
-	w2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req2.Header.Set("Authorization", "Bearer unknown-token")
-	fa.Engine().ServeHTTP(w2, req2)
-	assert.Equal(t, http.StatusUnauthorized, w2.Code)
+	w2 := testutil.ServeRequest(fa.Engine(), req2)
+	testutil.AssertStatus(t, w2, http.StatusUnauthorized)
 }
 
 // ── setupAsyncQueue ───────────────────────────────────────────────────────────
@@ -398,7 +386,6 @@ func TestBuildMiddlewareChain_EnableSwagger_Whitelisted(t *testing.T) {
 // ── healthCheckHandler branches ───────────────────────────────────────────────
 
 func TestHealthCheckHandler_AllHealthy(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	mr := miniredis.NewMiniRedis()
 	require.NoError(t, mr.Start())
 	defer mr.Close()
@@ -419,7 +406,6 @@ func TestHealthCheckHandler_AllHealthy(t *testing.T) {
 }
 
 func TestHealthCheckHandler_RedisUnhealthy(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	mr := miniredis.NewMiniRedis()
 	require.NoError(t, mr.Start())
 
@@ -442,7 +428,6 @@ func TestHealthCheckHandler_RedisUnhealthy(t *testing.T) {
 // ── setupAsyncQueue: SchedulerConfig and PelConfig branches ──────────────────
 
 func TestSetupAsyncQueue_WithSchedulerAndPelConfig(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	mr := miniredis.NewMiniRedis()
 	require.NoError(t, mr.Start())
 	defer mr.Close()

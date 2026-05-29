@@ -5,26 +5,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	dbredis "github.com/huangyangke/go-aikit/database/redis"
+	"github.com/huangyangke/go-aikit/internal/testutil"
 )
 
-func newTestRedis(t *testing.T) (*dbredis.Redis, *miniredis.Miniredis) {
-	t.Helper()
-	mr := miniredis.RunT(t)
-	r := dbredis.New(&dbredis.Config{
-		Name:  "test",
-		Type:  dbredis.StandaloneType,
-		Addrs: []string{mr.Addr()},
-	})
-	return r, mr
-}
-
 func TestLock_TryLock_Success(t *testing.T) {
-	r, _ := newTestRedis(t)
+	r, _ := testutil.NewRedis(t)
 	lock := r.NewLock(context.Background(), "test:lock", 5*time.Second)
 
 	ok, err := lock.TryLock()
@@ -33,7 +22,7 @@ func TestLock_TryLock_Success(t *testing.T) {
 }
 
 func TestLock_TryLock_AlreadyHeld(t *testing.T) {
-	r, _ := newTestRedis(t)
+	r, _ := testutil.NewRedis(t)
 	ctx := context.Background()
 
 	lock1 := r.NewLock(ctx, "test:lock", 5*time.Second)
@@ -49,7 +38,7 @@ func TestLock_TryLock_AlreadyHeld(t *testing.T) {
 }
 
 func TestLock_Unlock_Success(t *testing.T) {
-	r, _ := newTestRedis(t)
+	r, _ := testutil.NewRedis(t)
 	ctx := context.Background()
 
 	lock := r.NewLock(ctx, "test:lock", 5*time.Second)
@@ -63,7 +52,7 @@ func TestLock_Unlock_Success(t *testing.T) {
 }
 
 func TestLock_Unlock_NotOwner(t *testing.T) {
-	r, _ := newTestRedis(t)
+	r, _ := testutil.NewRedis(t)
 	ctx := context.Background()
 
 	lock1 := r.NewLock(ctx, "test:lock", 5*time.Second)
@@ -79,7 +68,7 @@ func TestLock_Unlock_NotOwner(t *testing.T) {
 }
 
 func TestLock_TryLock_AfterUnlock(t *testing.T) {
-	r, _ := newTestRedis(t)
+	r, _ := testutil.NewRedis(t)
 	ctx := context.Background()
 
 	lock := r.NewLock(ctx, "test:lock", 5*time.Second)
@@ -94,7 +83,7 @@ func TestLock_TryLock_AfterUnlock(t *testing.T) {
 }
 
 func TestLock_Refresh(t *testing.T) {
-	r, mr := newTestRedis(t)
+	r, mr := testutil.NewRedis(t)
 	ctx := context.Background()
 
 	lock := r.NewLock(ctx, "test:lock", 200*time.Millisecond)
@@ -113,7 +102,7 @@ func TestLock_Refresh(t *testing.T) {
 }
 
 func TestLock_Watchdog_KeepsLockAlive(t *testing.T) {
-	r, mr := newTestRedis(t)
+	r, mr := testutil.NewRedis(t)
 	ctx := context.Background()
 
 	// Short expire; watchdog should renew before it expires
@@ -137,7 +126,7 @@ func TestLock_Watchdog_KeepsLockAlive(t *testing.T) {
 }
 
 func TestLock_Watchdog_StopsOnUnlock(t *testing.T) {
-	r, mr := newTestRedis(t)
+	r, mr := testutil.NewRedis(t)
 	ctx := context.Background()
 
 	lock := r.NewLock(ctx, "test:watchdog:stop", 300*time.Millisecond, dbredis.WithWatchdog(ctx))
@@ -158,7 +147,7 @@ func TestLock_Watchdog_StopsOnUnlock(t *testing.T) {
 }
 
 func TestLock_Watchdog_StopsOnContextCancel(t *testing.T) {
-	r, mr := newTestRedis(t)
+	r, mr := testutil.NewRedis(t)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	lock := r.NewLock(ctx, "test:watchdog:ctx", 300*time.Millisecond, dbredis.WithWatchdog(ctx))

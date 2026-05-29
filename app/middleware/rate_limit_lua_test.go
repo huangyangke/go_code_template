@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -11,6 +10,8 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/huangyangke/go-aikit/internal/testutil"
 )
 
 func TestRateLimit_WithRealRedis(t *testing.T) {
@@ -19,26 +20,23 @@ func TestRateLimit_WithRealRedis(t *testing.T) {
 	t.Cleanup(mr.Close)
 
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	defer rdb.Close()
+	t.Cleanup(func() { _ = rdb.Close() })
 
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(RateLimit(rdb, RateLimitConfig{Limit: 2, Window: time.Minute}))
 	r.GET("/api", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	// First 2 requests should succeed
+	// 前 2 次请求应成功
 	for i := 0; i < 2; i++ {
-		w := httptest.NewRecorder()
 		req, _ := http.NewRequest(http.MethodGet, "/api", nil)
-		r.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Code)
+		w := testutil.ServeRequest(r, req)
+		testutil.AssertStatus(t, w, http.StatusOK)
 	}
 
-	// Third request should be rate limited
-	w := httptest.NewRecorder()
+	// 第 3 次请求应被限流
 	req, _ := http.NewRequest(http.MethodGet, "/api", nil)
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusTooManyRequests, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusTooManyRequests)
 }
 
 func TestRateLimit_TTLIsAlwaysSet(t *testing.T) {
@@ -49,19 +47,17 @@ func TestRateLimit_TTLIsAlwaysSet(t *testing.T) {
 	t.Cleanup(mr.Close)
 
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	defer rdb.Close()
+	t.Cleanup(func() { _ = rdb.Close() })
 
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(RateLimit(rdb, RateLimitConfig{Limit: 5, Window: time.Minute}))
 	r.GET("/api", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/api", nil)
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 
-	// Find the rate limit key
+	// 找到限流 key 并验证其 TTL
 	keys := mr.Keys()
 	found := false
 	for _, key := range keys {
@@ -80,18 +76,17 @@ func TestRateLimit_PreservesSubSecondWindowTTL(t *testing.T) {
 	t.Cleanup(mr.Close)
 
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	defer rdb.Close()
+	t.Cleanup(func() { _ = rdb.Close() })
 
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(RateLimit(rdb, RateLimitConfig{Limit: 5, Window: 500 * time.Millisecond}))
 	r.GET("/api", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/api", nil)
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 
+	// 验证亚秒级窗口的 TTL 保留
 	keys := mr.Keys()
 	found := false
 	for _, key := range keys {

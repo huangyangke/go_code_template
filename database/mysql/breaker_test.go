@@ -6,30 +6,21 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
+	"github.com/huangyangke/go-aikit/internal/testutil"
 	"github.com/huangyangke/go-aikit/resilience"
 )
 
 // openBreakerTestDB opens a sqlite :memory: DB with the breaker plugin attached.
 func openBreakerTestDB(t *testing.T, cfg resilience.Config) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	db := testutil.NewSQLiteDBWithModels(t, &testModel{})
 	sqlDB, err := db.DB()
 	if err != nil {
 		t.Fatalf("get sql db: %v", err)
 	}
 	sqlDB.SetMaxOpenConns(1)
-	t.Cleanup(func() {
-		_ = sqlDB.Close()
-	})
-	if err := db.AutoMigrate(&testModel{}); err != nil {
-		t.Fatalf("auto migrate: %v", err)
-	}
 	if err := db.Use(NewBreakerPlugin(cfg)); err != nil {
 		t.Fatalf("register breaker plugin: %v", err)
 	}

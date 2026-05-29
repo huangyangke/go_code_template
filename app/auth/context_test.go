@@ -11,7 +11,6 @@ import (
 )
 
 func TestGetUID(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -22,7 +21,6 @@ func TestGetUID(t *testing.T) {
 }
 
 func TestGetScopes(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -33,7 +31,6 @@ func TestGetScopes(t *testing.T) {
 }
 
 func TestGetTokenData(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -44,7 +41,6 @@ func TestGetTokenData(t *testing.T) {
 }
 
 func TestGetUID_WrongType(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -53,7 +49,6 @@ func TestGetUID_WrongType(t *testing.T) {
 }
 
 func TestGetScopes_WrongType(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
@@ -62,7 +57,6 @@ func TestGetScopes_WrongType(t *testing.T) {
 }
 
 func TestGetTokenData_WrongType(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 

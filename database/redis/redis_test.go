@@ -12,7 +12,8 @@ func TestNew_NoAddrs_Panics(t *testing.T) {
 		Addrs: []string{},
 		Type:  StandaloneType,
 	}
-	assert.Panics(t, func() { New(cfg) })
+	_, err := New(cfg)
+	assert.Error(t, err)
 }
 
 func TestNew_InvalidType_Panics(t *testing.T) {
@@ -20,7 +21,8 @@ func TestNew_InvalidType_Panics(t *testing.T) {
 		Addrs: []string{"localhost:6379"},
 		Type:  "invalid",
 	}
-	assert.Panics(t, func() { New(cfg) })
+	_, err := New(cfg)
+	assert.Error(t, err)
 }
 
 func TestNew_SentinelNoMasterName_Panics(t *testing.T) {
@@ -29,7 +31,8 @@ func TestNew_SentinelNoMasterName_Panics(t *testing.T) {
 		Type:  SentinelType,
 		// MasterName intentionally empty
 	}
-	assert.Panics(t, func() { New(cfg) })
+	_, err := New(cfg)
+	assert.Error(t, err)
 }
 
 func TestConfig_fix_Defaults(t *testing.T) {
