@@ -26,16 +26,16 @@ func main() {
 	loader := config.MustNew("configs/config.yaml",
 		config.WithEnvFile(fmt.Sprintf("configs/.env.%s", env)),
 	)
-	// 服务名称（唯一）
-	family := loader.GetString("app.family", "go-template")
+	// 服务名称（必须唯一）
+	family := loader.GetString("app.family")
 	// 日志初始化
 	log.Init(&log.Config{
 		Level:      loader.GetString("log.level", "info"),
 		Family:     family,
 		Stdout:     loader.GetBool("log.stdout", env != "prod"),
 		Dir:        loader.GetString("log.dir", "logs"),
-		MaxLogFile: loader.GetInt("log.max_log_file", 10),
-		RotateSize: int64(loader.GetInt("log.rotate_size", 104857600)),
+		MaxLogFile: loader.GetInt("log.max_log_file", 10), // 最多10个日志文件
+		RotateSize: int64(loader.GetInt("log.rotate_size", 104857600)), // 100M
 		// log.InfoCtx(ctx, ...) 日志输出自动携带 task_id
 		WithFields: map[string]log.WithField{
 			"task_id": func(ctx context.Context) map[string]interface{} {
