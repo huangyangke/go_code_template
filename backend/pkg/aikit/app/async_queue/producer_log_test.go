@@ -9,16 +9,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/huangyangke/go-aikit/internal/testutil"
 	"github.com/huangyangke/go-aikit/log"
 )
 
 func TestProducerHandleEnqueueLogsBindError(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
 	oldStderr := os.Stderr
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
@@ -31,19 +29,18 @@ func TestProducerHandleEnqueueLogsBindError(t *testing.T) {
 	log.Init(&log.Config{Stdout: true, Level: "debug"})
 
 	p := &Producer{namespace: "test"}
-	router := gin.New()
+	router := testutil.NewGinRouter(t)
 	router.POST("/task", p.handleEnqueue("/task"))
 
 	req := httptest.NewRequest(http.MethodPost, "/task", strings.NewReader("{bad-json"))
 	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
+	rec := testutil.ServeRequest(router, req)
 
 	require.NoError(t, w.Close())
 	var buf bytes.Buffer
 	_, err = io.Copy(&buf, r)
 	require.NoError(t, err)
 
-	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	testutil.AssertStatus(t, rec, http.StatusUnprocessableEntity)
 	assert.Contains(t, buf.String(), "[Producer][/task][request_bind_error]")
 }

@@ -2,109 +2,102 @@ package response
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/huangyangke/go-aikit/internal/testutil"
 )
 
-func testContext() (*gin.Context, *httptest.ResponseRecorder) {
-	gin.SetMode(gin.TestMode)
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	return c, w
+func TestJSON_Basic(t *testing.T) {
+	r := testutil.NewGinRouter(t)
+	r.GET("/", func(c *gin.Context) {
+		c.Set("task_id", "test-task-123")
+		JSON(c, map[string]string{"key": "value"}, "")
+	})
+	w := testutil.ServeRequest(r, newGET(t, "/"))
+
+	testutil.AssertStatus(t, w, http.StatusOK)
+
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, CodeSuccess, resp.Code)
+	assert.Equal(t, "success", resp.Msg)
+	assert.Equal(t, "test-task-123", resp.TaskID)
 }
 
-func TestBadRequest(t *testing.T) {
-	c, w := testContext()
-	BadRequest(c)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+func TestJSON_CustomMsg(t *testing.T) {
+	r := testutil.NewGinRouter(t)
+	r.GET("/", func(c *gin.Context) {
+		c.Set("task_id", "test-task-123")
+		JSON(c, nil, "", "取消信号已发送")
+	})
+	w := testutil.ServeRequest(r, newGET(t, "/"))
+
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "取消信号已发送", resp.Msg)
+}
+
+func TestJSON_TaskIDFallback(t *testing.T) {
+	r := testutil.NewGinRouter(t)
+	r.GET("/", func(c *gin.Context) { JSON(c, nil, "custom-id") })
+	w := testutil.ServeRequest(r, newGET(t, "/"))
+
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "custom-id", resp.TaskID)
+}
+
+func TestJSONErr_Nil(t *testing.T) {
+	r := testutil.NewGinRouter(t)
+	r.GET("/", func(c *gin.Context) {
+		c.Set("task_id", "test-task-123")
+		JSONErr(c, map[string]string{"result": "ok"}, nil)
+	})
+	w := testutil.ServeRequest(r, newGET(t, "/"))
+
+	testutil.AssertStatus(t, w, http.StatusOK)
+
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, CodeSuccess, resp.Code)
+	assert.Equal(t, "ok", resp.Data.(map[string]interface{})["result"])
+}
+
+func TestJSONErr_BizError(t *testing.T) {
+	r := testutil.NewGinRouter(t)
+	r.GET("/", func(c *gin.Context) {
+		c.Set("task_id", "test-task-123")
+		err := &frameworkError{http.StatusBadRequest, CodeBadRequest, "请求错误"}
+		JSONErr(c, nil, err)
+	})
+	w := testutil.ServeRequest(r, newGET(t, "/"))
+
+	testutil.AssertStatus(t, w, http.StatusBadRequest)
+
 	var resp APIResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, CodeBadRequest, resp.Code)
 	assert.Equal(t, "请求错误", resp.Msg)
 }
 
-func TestParamError(t *testing.T) {
-	c, w := testContext()
-	ParamError(c)
-	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
-	var resp APIResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, CodeParamError, resp.Code)
-}
+func TestJSONErr_GeneralError(t *testing.T) {
+	r := testutil.NewGinRouter(t)
+	r.GET("/", func(c *gin.Context) {
+		c.Set("task_id", "test-task-123")
+		JSONErr(c, nil, errors.New("something went wrong"))
+	})
+	w := testutil.ServeRequest(r, newGET(t, "/"))
 
-func TestMethodNotAllowed(t *testing.T) {
-	c, w := testContext()
-	MethodNotAllowed(c)
-	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
-	var resp APIResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, CodeMethodDenied, resp.Code)
-}
+	testutil.AssertStatus(t, w, http.StatusInternalServerError)
 
-func TestNotFound(t *testing.T) {
-	c, w := testContext()
-	NotFound(c)
-	assert.Equal(t, http.StatusNotFound, w.Code)
-	var resp APIResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, CodeNotFound, resp.Code)
-}
-
-func TestUserNotFound(t *testing.T) {
-	c, w := testContext()
-	UserNotFound(c)
-	assert.Equal(t, http.StatusNotFound, w.Code)
-	var resp APIResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, CodeUserNotFound, resp.Code)
-}
-
-func TestInternalError(t *testing.T) {
-	c, w := testContext()
-	InternalError(c)
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	var resp APIResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, CodeInternalError, resp.Code)
-}
-
-func TestUnauthorized(t *testing.T) {
-	c, w := testContext()
-	Unauthorized(c)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
-	var resp APIResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, CodeUnauthorized, resp.Code)
-}
-
-func TestForbidden(t *testing.T) {
-	c, w := testContext()
-	Forbidden(c)
-	assert.Equal(t, http.StatusForbidden, w.Code)
-	var resp APIResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, CodeForbidden, resp.Code)
-}
-
-func TestRateLimited(t *testing.T) {
-	c, w := testContext()
-	RateLimited(c)
-	assert.Equal(t, http.StatusTooManyRequests, w.Code)
-	var resp APIResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, CodeRateLimited, resp.Code)
-}
-
-func TestConflict(t *testing.T) {
-	c, w := testContext()
-	Conflict(c)
-	assert.Equal(t, http.StatusConflict, w.Code)
-	var resp APIResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, CodeConflict, resp.Code)
+	assert.Equal(t, "服务器内部错误", resp.Msg)
 }

@@ -89,13 +89,13 @@ func WithLogger(l logger) Option {
 // New 创建 Redis 客户端，连接失败时 panic.
 // 参数：c - 连接配置, opts - 配置选项.
 // 返回值：*Redis - Redis 客户端实例.
-func New(c *Config, opts ...Option) *Redis {
+func New(c *Config, opts ...Option) (*Redis, error) {
 	for _, opt := range opts {
 		opt(c)
 	}
 	c.Fix()
 	if err := c.Validate(); err != nil {
-		panic(err.Error())
+		return nil, err
 	}
 	c.hooks = append([]redis.Hook{NewPrometheusHook(c.Name)}, c.hooks...)
 	log.Info("[Redis][connect_start][type=%s][addrs=%v][db=%d]", c.Type, c.Addrs, c.DB)
@@ -113,7 +113,7 @@ func New(c *Config, opts ...Option) *Redis {
 	case StandaloneType:
 		client = c.newStandaloneClient()
 	default:
-		panic(fmt.Sprintf("redis type must be one of (cluster, sentinel, standalone), got: %s", c.Type))
+		return nil, fmt.Errorf("redis type must be one of (cluster, sentinel, standalone), got: %s", c.Type)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), c.PingTimeout)
@@ -121,11 +121,20 @@ func New(c *Config, opts ...Option) *Redis {
 
 	if err := client.Ping(ctx).Err(); err != nil {
 		log.Error("[Redis][connect_error][type=%s][addrs=%v]: %v", c.Type, c.Addrs, err)
-		panic(fmt.Sprintf("redis connect error: %v", err))
+		return nil, fmt.Errorf("redis connect error: %w", err)
 	}
 
 	log.Info("[Redis][connected][type=%s][addrs=%v]", c.Type, c.Addrs)
-	return &Redis{config: c, client: client}
+	return &Redis{config: c, client: client}, nil
+}
+
+// MustNew 与 New 相同，但发生错误时 panic.
+func MustNew(c *Config, opts ...Option) *Redis {
+	r, err := New(c, opts...)
+	if err != nil {
+		panic(err.Error())
+	}
+	return r
 }
 
 func (c *Config) newClusterClient() *redis.ClusterClient {

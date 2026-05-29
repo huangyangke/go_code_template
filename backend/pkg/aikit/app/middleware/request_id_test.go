@@ -8,6 +8,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/huangyangke/go-aikit/internal/testutil"
 )
 
 func TestGetTaskID_Empty(t *testing.T) {
@@ -21,52 +23,49 @@ func TestWithTaskID_GetTaskID(t *testing.T) {
 }
 
 func TestRequestID_GeneratesUUID(t *testing.T) {
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(RequestID())
 	r.GET("/test", func(c *gin.Context) {
 		taskID, _ := c.Get("task_id")
 		c.String(http.StatusOK, taskID.(string))
 	})
 
-	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	r.ServeHTTP(w, req)
+	w := testutil.ServeRequest(r, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	assert.NotEmpty(t, w.Body.String())
 	assert.NotEmpty(t, w.Header().Get("X-Request-ID"))
 	assert.Equal(t, w.Body.String(), w.Header().Get("X-Request-ID"))
 }
 
 func TestRequestID_UsesProvidedHeader(t *testing.T) {
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(RequestID())
 	r.GET("/test", func(c *gin.Context) {
 		taskID, _ := c.Get("task_id")
 		c.String(http.StatusOK, taskID.(string))
 	})
 
-	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	req.Header.Set("X-Request-ID", "custom-id-456")
-	r.ServeHTTP(w, req)
+	w := testutil.ServeRequest(r, req)
 
 	assert.Equal(t, "custom-id-456", w.Body.String())
 	assert.Equal(t, "custom-id-456", w.Header().Get("X-Request-ID"))
 }
 
 func TestRequestID_PropagatedToContext(t *testing.T) {
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(RequestID())
 	r.GET("/test", func(c *gin.Context) {
 		id := GetTaskID(c.Request.Context())
 		c.String(http.StatusOK, id)
 	})
 
-	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	req.Header.Set("X-Request-ID", "ctx-id-789")
-	r.ServeHTTP(w, req)
+	w := testutil.ServeRequest(r, req)
 
 	assert.Equal(t, "ctx-id-789", w.Body.String())
 }
@@ -74,28 +73,26 @@ func TestRequestID_PropagatedToContext(t *testing.T) {
 // ── Additional request-id scenarios ──────────────────────────────────────────
 
 func TestRequestID_ReuseIncomingHeader(t *testing.T) {
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(RequestID())
 	r.GET("/ping", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
 	req.Header.Set("X-Request-ID", "my-trace-id")
-	r.ServeHTTP(w, req)
+	w := testutil.ServeRequest(r, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	assert.Equal(t, "my-trace-id", w.Header().Get("X-Request-ID"))
 }
 
 func TestRequestID_GeneratesUUIDWhenMissing(t *testing.T) {
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(RequestID())
 	r.GET("/ping", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
-	r.ServeHTTP(w, req)
+	w := testutil.ServeRequest(r, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	assert.NotEmpty(t, w.Header().Get("X-Request-ID"))
 }

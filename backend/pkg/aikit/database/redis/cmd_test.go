@@ -13,7 +13,7 @@ import (
 func newTestRedis(t *testing.T) (*Redis, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
-	r := New(&Config{
+	r := MustNew(&Config{
 		Name:  "cmdtest",
 		Type:  StandaloneType,
 		Addrs: []string{mr.Addr()},

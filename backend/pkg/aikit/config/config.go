@@ -144,6 +144,18 @@ func New(configPath string, opts ...Option) (*ConfigLoader, error) {
 	return NewFromPaths([]string{configPath}, opts...)
 }
 
+// MustNew 与 New 相同，但加载失败时直接 panic.
+// 适用于启动阶段配置不可缺失的场景，省去手写 if err != nil.
+// 参数：configPath - 配置文件路径, opts - 可选参数列表.
+// 返回值：loader - 配置加载器.
+func MustNew(configPath string, opts ...Option) *ConfigLoader {
+	loader, err := New(configPath, opts...)
+	if err != nil {
+		panic(fmt.Sprintf("config: %v", err))
+	}
+	return loader
+}
+
 // NewFromPaths 使用多个本地配置文件创建加载器.
 // 构造成功时会立即完成一次 load()，因此返回后的配置即可直接读取.
 // 参数：configPaths - 配置文件路径列表, opts - 可选参数列表.
@@ -1154,6 +1166,14 @@ func (l *ConfigLoader) Scan(key string, v interface{}) error {
 	}
 
 	return yaml.Unmarshal(buf, v)
+}
+
+// MustScan 与 Scan 相同，但扫描失败时直接 panic.
+// 适用于启动阶段配置不可缺失的场景.
+func (l *ConfigLoader) MustScan(key string, v interface{}) {
+	if err := l.Scan(key, v); err != nil {
+		panic(fmt.Sprintf("config: %v", err))
+	}
 }
 
 // Reload 手动触发一次完整重载.

@@ -282,7 +282,7 @@ func (a *FastApp) RegisterRedis(name string, cfg *dbredis.Config) *dbredis.Redis
 	if cfg.Name == "" {
 		cfg.Name = a.cfg.Family + "/" + name
 	}
-	rdb := dbredis.New(cfg)
+	rdb := dbredis.MustNew(cfg)
 	a.redisInstances[name] = rdb
 	return rdb
 }
@@ -301,7 +301,7 @@ func (a *FastApp) RegisterMySQL(name string, cfg *dbmysql.Config, opts ...dbmysq
 	if cfg.Name == "" {
 		cfg.Name = a.cfg.Family + "/" + name
 	}
-	db := dbmysql.New(cfg, opts...)
+	db := dbmysql.MustNew(cfg, opts...)
 	a.mysqlInstances[name] = db
 	return db
 }

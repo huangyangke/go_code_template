@@ -3,7 +3,6 @@ package middleware
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -12,35 +11,35 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/huangyangke/go-aikit/internal/testutil"
 )
 
 func TestRateLimit_AllowsUnderLimit(t *testing.T) {
-	// Use an unavailable Redis to trigger fail-open behavior
+	// 使用不可达的 Redis 触发 fail-open 行为.
 	rdb := goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:19999"})
 
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(RateLimit(rdb, RateLimitConfig{Limit: 5, Window: time.Minute}))
 	r.GET("/api", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/api", nil)
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 func TestRateLimit_FailOpen(t *testing.T) {
-	// Redis unavailable → fail open, all requests pass
+	// Redis 不可用时 fail open，所有请求放行.
 	rdb := goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:19999"})
 
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(RateLimit(rdb, RateLimitConfig{Limit: 1, Window: time.Minute}))
 	r.GET("/api", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	for i := 0; i < 5; i++ {
-		w := httptest.NewRecorder()
 		req, _ := http.NewRequest(http.MethodGet, "/api", nil)
-		r.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Code)
+		w := testutil.ServeRequest(r, req)
+		testutil.AssertStatus(t, w, http.StatusOK)
 	}
 }
 
@@ -50,10 +49,9 @@ func TestRateLimit_CustomKeyPrefix(t *testing.T) {
 	t.Cleanup(mr.Close)
 
 	rdb := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
-	defer rdb.Close()
+	t.Cleanup(func() { _ = rdb.Close() })
 
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(RateLimit(rdb, RateLimitConfig{
 		Limit:     1,
 		Window:    time.Minute,
@@ -61,19 +59,17 @@ func TestRateLimit_CustomKeyPrefix(t *testing.T) {
 	}))
 	r.GET("/api", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	// First request passes, second is rate limited
+	// 首次请求放行，后续限流.
 	for i := 0; i < 1; i++ {
-		w := httptest.NewRecorder()
 		req, _ := http.NewRequest(http.MethodGet, "/api", nil)
-		r.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Code)
+		w := testutil.ServeRequest(r, req)
+		testutil.AssertStatus(t, w, http.StatusOK)
 	}
-	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/api", nil)
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusTooManyRequests, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusTooManyRequests)
 
-	// Verify the custom prefix is used in the Redis key
+	// 校验 Redis 中使用了自定义前缀.
 	keys := mr.Keys()
 	assert.NotEmpty(t, keys)
 	assert.True(t, len(keys[0]) > 8 && keys[0][:8] == "myapp:rl",
@@ -91,15 +87,13 @@ func TestRateLimit_DefaultKeyFunc(t *testing.T) {
 }
 
 func TestTokenAuth_NoHeader_Returns401Body(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(TokenAuth(func(ctx context.Context, token string) (bool, error) {
 		return false, nil
 	}))
 	r.GET("/protected", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/protected", nil)
-	r.ServeHTTP(w, req)
+	w := testutil.ServeRequest(r, req)
 	assert.Contains(t, w.Body.String(), "10007")
 }

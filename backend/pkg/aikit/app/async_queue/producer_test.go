@@ -15,11 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/huangyangke/go-aikit/app/middleware"
+	"github.com/huangyangke/go-aikit/internal/testutil"
 )
-
-func init() {
-	gin.SetMode(gin.TestMode)
-}
 
 // newTestProducer builds a Producer connected to a miniredis instance.
 func newTestProducer(t *testing.T) *Producer {
@@ -37,8 +34,9 @@ func newTestProducer(t *testing.T) *Producer {
 }
 
 // setupGin returns a gin engine with the producer routes registered.
-func setupGin(p *Producer) *gin.Engine {
-	r := gin.New()
+func setupGin(t *testing.T, p *Producer) *gin.Engine {
+	t.Helper()
+	r := testutil.NewGinRouter(t)
 	p.RegisterRoutes(r, "/tasks")
 	return r
 }
@@ -64,12 +62,11 @@ func TestHandleStatus_Found(t *testing.T) {
 
 	require.NoError(t, p.statusStore.InitQueued(ctx, "task-abc", "/ep", 5))
 
-	r := setupGin(p)
+	r := setupGin(t, p)
 	req := httptest.NewRequest(http.MethodGet, "/tasks/status/task-abc", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
+	rec := testutil.ServeRequest(r, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
+	testutil.AssertStatus(t, rec, http.StatusOK)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	data, ok := body["data"].(map[string]any)
@@ -79,13 +76,12 @@ func TestHandleStatus_Found(t *testing.T) {
 
 func TestHandleStatus_NotFound(t *testing.T) {
 	p := newTestProducer(t)
-	r := setupGin(p)
+	r := setupGin(t, p)
 
 	req := httptest.NewRequest(http.MethodGet, "/tasks/status/nonexistent", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
+	rec := testutil.ServeRequest(r, req)
 
-	assert.Equal(t, http.StatusNotFound, rec.Code)
+	testutil.AssertStatus(t, rec, http.StatusNotFound)
 }
 
 // ================================
@@ -94,43 +90,40 @@ func TestHandleStatus_NotFound(t *testing.T) {
 
 func TestHandleCancel_NotFound(t *testing.T) {
 	p := newTestProducer(t)
-	r := setupGin(p)
+	r := setupGin(t, p)
 
 	req := httptest.NewRequest(http.MethodPost, "/tasks/cancel/ghost-id", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
+	rec := testutil.ServeRequest(r, req)
 
-	assert.Equal(t, http.StatusNotFound, rec.Code)
+	testutil.AssertStatus(t, rec, http.StatusNotFound)
 }
 
 func TestHandleCancel_TerminalState_Conflict(t *testing.T) {
 	p := newTestProducer(t)
 	ctx := context.Background()
-	r := setupGin(p)
+	r := setupGin(t, p)
 
 	// Put task in terminal success state
 	require.NoError(t, p.statusStore.InitQueued(ctx, "done-task", "/ep", 5))
 	require.NoError(t, p.statusStore.MarkSuccess(ctx, "done-task", "result"))
 
 	req := httptest.NewRequest(http.MethodPost, "/tasks/cancel/done-task", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
+	rec := testutil.ServeRequest(r, req)
 
-	assert.Equal(t, http.StatusConflict, rec.Code)
+	testutil.AssertStatus(t, rec, http.StatusConflict)
 }
 
 func TestHandleCancel_Queued_AtomicallyCancels(t *testing.T) {
 	p := newTestProducer(t)
 	ctx := context.Background()
-	r := setupGin(p)
+	r := setupGin(t, p)
 
 	require.NoError(t, p.statusStore.InitQueued(ctx, "queued-task", "/ep", 5))
 
 	req := httptest.NewRequest(http.MethodPost, "/tasks/cancel/queued-task", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
+	rec := testutil.ServeRequest(r, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
+	testutil.AssertStatus(t, rec, http.StatusOK)
 
 	ts, err := p.statusStore.Get(ctx, "queued-task")
 	require.NoError(t, err)
@@ -145,7 +138,7 @@ func TestHandleCancel_Running_WritesCancelKeyAndPublishes(t *testing.T) {
 			"/ep": {Handler: func(ctx Context) (any, error) { return nil, nil }},
 		}, "test")
 	ctx := context.Background()
-	r := setupGin(p)
+	r := setupGin(t, p)
 
 	// Subscribe to cancel channel before the request
 	pubsub := rdb.Subscribe(ctx, buildCancelChannel("test"))
@@ -157,10 +150,9 @@ func TestHandleCancel_Running_WritesCancelKeyAndPublishes(t *testing.T) {
 	require.NoError(t, p.statusStore.MarkRunning(ctx, "run-task"))
 
 	req := httptest.NewRequest(http.MethodPost, "/tasks/cancel/run-task", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
+	rec := testutil.ServeRequest(r, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
+	testutil.AssertStatus(t, rec, http.StatusOK)
 
 	// Cancel key should exist in Redis
 	cancelKey := buildCancelKey("test", "run-task")
@@ -188,15 +180,14 @@ func TestHandleEvents_TerminalTask_SendsStatusAndCloses(t *testing.T) {
 			"/ep": {Handler: func(ctx Context) (any, error) { return nil, nil }},
 		}, "test")
 	ctx := context.Background()
-	r := setupGin(p)
+	r := setupGin(t, p)
 
 	// Seed a task in success state
 	require.NoError(t, p.statusStore.InitQueued(ctx, "fin-task", "/ep", 5))
 	require.NoError(t, p.statusStore.MarkSuccess(ctx, "fin-task", "output"))
 
 	req := httptest.NewRequest(http.MethodGet, "/tasks/events/fin-task", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
+	rec := testutil.ServeRequest(r, req)
 
 	body := rec.Body.String()
 	assert.Contains(t, body, "data:", "SSE response must contain data: lines")
@@ -235,7 +226,7 @@ func TestRegisterRoutes_RoutesExist(t *testing.T) {
 			"/ep": {Handler: func(ctx Context) (any, error) { return nil, nil }},
 		}, "test")
 
-	r := setupGin(p)
+	r := setupGin(t, p)
 
 	// Seed a task so status/cancel routes can exercise handler logic (not just "not found")
 	ctx := context.Background()
@@ -245,25 +236,22 @@ func TestRegisterRoutes_RoutesExist(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/tasks/ep",
 		strings.NewReader(`{"foo":"bar"}`))
 	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
+	rec := testutil.ServeRequest(r, req)
 	// Route is registered; any non-405 response means it was handled
 	assert.NotEqual(t, http.StatusMethodNotAllowed, rec.Code, "/tasks/ep should be registered as POST")
 
 	// /tasks/status/:task_id GET — route is registered; returns 200 for existing task
 	req2 := httptest.NewRequest(http.MethodGet, "/tasks/status/route-check-task", nil)
-	rec2 := httptest.NewRecorder()
-	r.ServeHTTP(rec2, req2)
-	assert.Equal(t, http.StatusOK, rec2.Code, "/tasks/status/:task_id should return 200 for existing task")
+	rec2 := testutil.ServeRequest(r, req2)
+	testutil.AssertStatus(t, rec2, http.StatusOK)
 	// Confirm the response is JSON (not gin's plain-text 404-page-not-found)
 	assert.Contains(t, rec2.Header().Get("Content-Type"), "application/json")
 
 	// /tasks/cancel/:task_id POST — route is registered; returns 200 for queued task
 	req3 := httptest.NewRequest(http.MethodPost, "/tasks/cancel/route-check-task", nil)
-	rec3 := httptest.NewRecorder()
-	r.ServeHTTP(rec3, req3)
+	rec3 := testutil.ServeRequest(r, req3)
 	// Cancel of a queued task returns 200
-	assert.Equal(t, http.StatusOK, rec3.Code, "/tasks/cancel/:task_id should be registered and callable")
+	testutil.AssertStatus(t, rec3, http.StatusOK)
 
 	// /tasks/events/:task_id GET — may time-out but must not be 404
 	reqCtx, reqCtxCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -282,7 +270,7 @@ func TestRegisterRoutes_RoutesExist(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 	}
 	// Route is registered: response should be SSE (200), not 404
-	assert.Equal(t, http.StatusOK, rec4.Code, "/tasks/events/:task_id should be registered")
+	testutil.AssertStatus(t, rec4, http.StatusOK)
 }
 
 // ── TaskEventDispatcher start/run/runOnce ─────────────────────────────────────
@@ -341,14 +329,13 @@ func TestTaskEventDispatcher_Unsubscribe_LastSubscriber(t *testing.T) {
 // ── handleEnqueue: all error branches ────────────────────────────────────────
 
 func TestHandleEnqueue_XAddError(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	mr, rdb := setupMiniredis(t)
 
 	p := NewProducer(rdb, RedisConfig{}, map[string]EndpointConfig{
 		"/ep": {Handler: func(ctx Context) (any, error) { return nil, nil }},
 	}, "ns-enq")
 
-	router := gin.New()
+	router := testutil.NewGinRouter(t)
 	p.RegisterRoutes(router, "/tasks")
 
 	// Cause XAdd to fail by closing miniredis after InitQueued
@@ -359,15 +346,13 @@ func TestHandleEnqueue_XAddError(t *testing.T) {
 	body := `{"text":"hello"}`
 	req := httptest.NewRequest(http.MethodPost, "/tasks/ep", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
+	rec := testutil.ServeRequest(router, req)
 	// Either 500 (XAdd failed) or 500 (InitQueued failed because stream is wrong type)
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	testutil.AssertStatus(t, rec, http.StatusInternalServerError)
 	_ = mr
 }
 
 func TestHandleEnqueue_DuplicateTaskID(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	mr, rdb := setupMiniredis(t)
 	defer mr.Close()
 
@@ -375,7 +360,7 @@ func TestHandleEnqueue_DuplicateTaskID(t *testing.T) {
 		"/ep": {Handler: func(ctx Context) (any, error) { return nil, nil }},
 	}, "ns-dup")
 
-	router := gin.New()
+	router := testutil.NewGinRouter(t)
 	router.Use(middleware.RequestID()) // inject X-Request-ID into context
 	p.RegisterRoutes(router, "/tasks")
 
@@ -386,45 +371,40 @@ func TestHandleEnqueue_DuplicateTaskID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/tasks/ep", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Request-ID", taskID)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusOK, rec.Code)
+	rec := testutil.ServeRequest(router, req)
+	testutil.AssertStatus(t, rec, http.StatusOK)
 
 	// Second request with same task ID → 409
 	req2 := httptest.NewRequest(http.MethodPost, "/tasks/ep", strings.NewReader(body))
 	req2.Header.Set("Content-Type", "application/json")
 	req2.Header.Set("X-Request-ID", taskID)
-	rec2 := httptest.NewRecorder()
-	router.ServeHTTP(rec2, req2)
-	assert.Equal(t, http.StatusConflict, rec2.Code)
+	rec2 := testutil.ServeRequest(router, req2)
+	testutil.AssertStatus(t, rec2, http.StatusConflict)
 }
 
 // ── handleStatus: error path ─────────────────────────────────────────────────
 
 func TestHandleStatus_RedisError(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	mr, rdb := setupMiniredis(t)
 
 	p := NewProducer(rdb, RedisConfig{}, map[string]EndpointConfig{}, "ns-sterr")
-	router := gin.New()
+	router := testutil.NewGinRouter(t)
 	p.RegisterRoutes(router, "/tasks")
 
 	mr.Close() // force Redis error
 
 	req := httptest.NewRequest(http.MethodGet, "/tasks/status/any-id", nil)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	rec := testutil.ServeRequest(router, req)
+	testutil.AssertStatus(t, rec, http.StatusInternalServerError)
 }
 
 // ── handleCancel: set key error ───────────────────────────────────────────────
 
 func TestHandleCancel_SetKeyError(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	mr, rdb := setupMiniredis(t)
 
 	p := NewProducer(rdb, RedisConfig{}, map[string]EndpointConfig{}, "ns-caerr")
-	router := gin.New()
+	router := testutil.NewGinRouter(t)
 	p.RegisterRoutes(router, "/tasks")
 
 	ctx := context.Background()
@@ -434,8 +414,7 @@ func TestHandleCancel_SetKeyError(t *testing.T) {
 	mr.Close() // force Redis error on Set
 
 	req := httptest.NewRequest(http.MethodPost, "/tasks/cancel/task-ca", nil)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
+	rec := testutil.ServeRequest(router, req)
 	// Redis closed → Get would fail with 500, or Set would fail — either way not 200
 	assert.NotEqual(t, http.StatusOK, rec.Code)
 }
@@ -443,7 +422,6 @@ func TestHandleCancel_SetKeyError(t *testing.T) {
 // ── handleEvents: non-terminal then heartbeat ─────────────────────────────────
 
 func TestHandleEvents_NonTerminalTask_SendsHeartbeat(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	mr, rdb := setupMiniredis(t)
 	defer mr.Close()
 
@@ -456,7 +434,7 @@ func TestHandleEvents_NonTerminalTask_SendsHeartbeat(t *testing.T) {
 	defer func() { DefaultSSEMaxLifetime = origLifetime }()
 
 	p := NewProducer(rdb, RedisConfig{}, map[string]EndpointConfig{}, "ns-ev2")
-	router := gin.New()
+	router := testutil.NewGinRouter(t)
 	p.RegisterRoutes(router, "/tasks")
 
 	ctx := context.Background()
@@ -464,8 +442,7 @@ func TestHandleEvents_NonTerminalTask_SendsHeartbeat(t *testing.T) {
 	require.NoError(t, p.statusStore.MarkRunning(ctx, "task-ev2"))
 
 	req := httptest.NewRequest(http.MethodGet, "/tasks/events/task-ev2", nil)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
+	rec := testutil.ServeRequest(router, req)
 
 	body := rec.Body.String()
 	// Should have received at least the initial running status + heartbeat or timeout

@@ -56,6 +56,13 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// MustValidate 与 Validate 相同，但在发生错误时 panic.
+func (c *Config) MustValidate() {
+	if err := c.Validate(); err != nil {
+		panic(err.Error())
+	}
+}
+
 // Model 所有 ORM 模型的基础模型，包含主键与软删除.
 type Model struct {
 	ID        uint           `gorm:"primaryKey;autoIncrement" json:"id"`
@@ -112,10 +119,10 @@ func WithSkipDefaultTransaction(skip bool) Option {
 // New 创建 MySQL 数据库连接，出错时 panic.
 // 参数：c - 连接配置, opts - GORM 配置选项.
 // 返回值：*Database - 数据库实例.
-func New(c *Config, opts ...Option) *Database {
+func New(c *Config, opts ...Option) (*Database, error) {
 	c.Fix()
 	if err := c.Validate(); err != nil {
-		panic(err.Error())
+		return nil, err
 	}
 	log.Info("[MySQL][connect_start][debug=%t][max_open=%d][max_idle=%d]", c.Debug, c.MaxOpenConns, c.MaxIdleConns)
 
@@ -131,13 +138,13 @@ func New(c *Config, opts ...Option) *Database {
 	db, err := gorm.Open(mysql.Open(c.DSN), gormConfig)
 	if err != nil {
 		log.Error("[MySQL][open_error]: %v", err)
-		panic(fmt.Sprintf("mysql: open error: %v", err))
+		return nil, fmt.Errorf("mysql: open error: %v", err)
 	}
 
 	sqlDB, err := db.DB()
 	if err != nil {
 		log.Error("[MySQL][underlying_db_error]: %v", err)
-		panic(fmt.Sprintf("mysql: get underlying sql.DB error: %v", err))
+		return nil, fmt.Errorf("mysql: get underlying sql.DB error: %v", err)
 	}
 
 	sqlDB.SetMaxOpenConns(c.MaxOpenConns)
@@ -147,20 +154,20 @@ func New(c *Config, opts ...Option) *Database {
 
 	if err := sqlDB.Ping(); err != nil {
 		log.Error("[MySQL][ping_error]: %v", err)
-		panic(fmt.Sprintf("mysql: ping error: %v", err))
+		return nil, fmt.Errorf("mysql: ping error: %v", err)
 	}
 
 	// Register timestamp plugin
 	if err := db.Use(&TimestampPlugin{}); err != nil {
 		log.Error("[MySQL][timestamp_plugin_error]: %v", err)
-		panic(fmt.Sprintf("mysql: timestamp plugin error: %v", err))
+		return nil, fmt.Errorf("mysql: timestamp plugin error: %v", err)
 	}
 
 	// Register circuit breaker plugin (optional)
 	if c.Breaker != nil {
 		if err := db.Use(NewBreakerPlugin(*c.Breaker)); err != nil {
 			log.Error("[MySQL][breaker_plugin_error]: %v", err)
-			panic(fmt.Sprintf("mysql: breaker plugin error: %v", err))
+			return nil, fmt.Errorf("mysql: breaker plugin error: %v", err)
 		}
 	}
 
@@ -168,12 +175,22 @@ func New(c *Config, opts ...Option) *Database {
 	if !c.DisableMetrics {
 		if err := db.Use(NewMetricsPlugin(c.Name)); err != nil {
 			log.Error("[MySQL][metrics_plugin_error]: %v", err)
-			panic(fmt.Sprintf("mysql: metrics plugin error: %v", err))
+			return nil, fmt.Errorf("mysql: metrics plugin error: %v", err)
 		}
 	}
 
 	log.Info("[MySQL][connected][debug=%t]", c.Debug)
-	return &Database{DB: db, cfg: c}
+	return &Database{DB: db, cfg: c}, nil
+}
+
+// MustNew 与 New 相同，但在发生错误时 panic.
+// 适用于初始化阶段，错误应该导致程序崩溃的场景.
+func MustNew(c *Config, opts ...Option) *Database {
+	db, err := New(c, opts...)
+	if err != nil {
+		panic(err.Error())
+	}
+	return db
 }
 
 // Close 关闭 MySQL 连接.

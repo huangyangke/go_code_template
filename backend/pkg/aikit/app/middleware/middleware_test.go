@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -13,101 +12,91 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/huangyangke/go-aikit/internal/testutil"
 )
 
-func init() {
-	gin.SetMode(gin.TestMode)
-}
-
 func TestPrometheus(t *testing.T) {
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(Prometheus())
 	r.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/test", nil)
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 func TestRequestLog(t *testing.T) {
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(RequestLog())
 	r.GET("/ping", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/ping", nil)
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 func TestTokenAuth_MissingHeader(t *testing.T) {
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(TokenAuth(func(ctx context.Context, token string) (bool, error) {
 		return token == "valid", nil
 	}))
 	r.GET("/secret", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/secret", nil)
-	r.ServeHTTP(w, req)
-	// Unauthorized now returns 401 with code 10007
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 }
 
 func TestTokenAuth_ValidToken(t *testing.T) {
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(TokenAuth(func(ctx context.Context, token string) (bool, error) {
 		return token == "mytoken", nil
 	}))
 	r.GET("/secret", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/secret", nil)
 	req.Header.Set("Authorization", "Bearer mytoken")
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 func TestTokenAuth_Whitelist(t *testing.T) {
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(TokenAuth(func(ctx context.Context, token string) (bool, error) {
 		return false, nil
 	}, "/public"))
 	r.GET("/public/resource", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/public/resource", nil)
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 func TestTokenAuth_InvalidScheme(t *testing.T) {
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(TokenAuth(func(ctx context.Context, token string) (bool, error) {
 		return true, nil
 	}))
 	r.GET("/secret", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/secret", nil)
 	req.Header.Set("Authorization", "Basic dXNlcjpwYXNz")
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 }
 
 func TestTokenAuth_VerifyError(t *testing.T) {
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(TokenAuth(func(ctx context.Context, token string) (bool, error) {
 		return false, context.Canceled
 	}))
 	r.GET("/secret", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/secret", nil)
 	req.Header.Set("Authorization", "Bearer mytoken")
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 }
 
 // ── OrVerify ──────────────────────────────────────────────────────────────────
@@ -206,59 +195,49 @@ func TestWithInternalToken_NilInner_MismatchReturnsFalse(t *testing.T) {
 // ── Prometheus path labeling ──────────────────────────────────────────────────
 
 func TestPrometheus_PathNoParams(t *testing.T) {
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(Prometheus())
 	r.GET("/api/users", func(c *gin.Context) {
-		// c.FullPath() returns "/api/users" — no param substitution needed
 		c.Status(http.StatusOK)
 	})
 
-	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/api/users", nil)
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 func TestPrometheus_PathWithParam_UsesFullPath(t *testing.T) {
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(Prometheus())
 	r.GET("/api/users/:id", func(c *gin.Context) {
-		// c.FullPath() returns "/api/users/:id" — gin route template, not the actual URL
 		c.Status(http.StatusOK)
 	})
 
-	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/api/users/123", nil)
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
-	// The Prometheus middleware records c.FullPath() which is the route template "/api/users/:id"
-	// not the concrete path "/api/users/123" — so dynamic IDs don't cause cardinality explosion.
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 // ── Prometheus: path without params ──────────────────────────────────────────
 
 func TestPrometheus_PathWithNoParams(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(Prometheus())
 	r.GET("/api/users", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	req, _ := http.NewRequest(http.MethodGet, "/api/users", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 func TestPrometheus_PathWithParams(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(Prometheus())
 	r.GET("/api/users/:id", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	req := httptest.NewRequest(http.MethodGet, "/api/users/123", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	req, _ := http.NewRequest(http.MethodGet, "/api/users/123", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 // ── RateLimit: window <= 0 defaults to 1s ────────────────────────────────────
@@ -266,89 +245,74 @@ func TestPrometheus_PathWithParams(t *testing.T) {
 func TestRateLimit_ZeroWindow_DefaultsToSecond(t *testing.T) {
 	mr := miniredis.NewMiniRedis()
 	require.NoError(t, mr.Start())
-	defer mr.Close()
+	t.Cleanup(mr.Close)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	defer rdb.Close()
+	t.Cleanup(func() { _ = rdb.Close() })
 
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(RateLimit(rdb, RateLimitConfig{
 		Limit:  100,
-		Window: 0, // should default to 1s
+		Window: 0,
 	}))
 	r.GET("/ping", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	req, _ := http.NewRequest(http.MethodGet, "/ping", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 }
 
 // ── RequestID: long task_id truncated ────────────────────────────────────────
 
 func TestRequestID_LongTaskID_Truncated(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(RequestID())
-	r.GET("/ping", func(c *gin.Context) {
-		c.Status(http.StatusOK)
-	})
+	r.GET("/ping", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	// A very long request ID (> 128 chars should be truncated or replaced)
 	longID := strings.Repeat("a", 200)
-	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/ping", nil)
 	req.Header.Set("X-Request-ID", longID)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
-	// Response should have some X-Request-ID (either truncated or UUID)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusOK)
 	assert.NotEmpty(t, w.Header().Get("X-Request-ID"))
 }
 
 // ── TokenAuth: verify error path ─────────────────────────────────────────────
 
 func TestTokenAuth_VerifyError_401(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(TokenAuth(func(ctx context.Context, token string) (bool, error) {
 		return false, errors.New("upstream error")
 	}))
 	r.GET("/secure", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/secure", nil)
 	req.Header.Set("Authorization", "Bearer sometoken")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 }
 
 // ── Prometheus: unmatched route (path=="") ────────────────────────────────────
 
 func TestPrometheus_UnmatchedRoute(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(Prometheus())
-	// No route registered for /unknown → FullPath() returns ""
-	req := httptest.NewRequest(http.MethodGet, "/unknown-route", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	// 404 is expected, just ensure no panic
-	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	req, _ := http.NewRequest(http.MethodGet, "/unknown-route", nil)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusNotFound)
 }
 
 // ── TokenAuth: verify ok=false ────────────────────────────────────────────────
 
 func TestTokenAuth_VerifyFalse_401(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := testutil.NewGinRouter(t)
 	r.Use(TokenAuth(func(ctx context.Context, token string) (bool, error) {
-		return false, nil // reject
+		return false, nil
 	}))
 	r.GET("/secure", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/secure", nil)
 	req.Header.Set("Authorization", "Bearer validtoken")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	w := testutil.ServeRequest(r, req)
+	testutil.AssertStatus(t, w, http.StatusUnauthorized)
 }

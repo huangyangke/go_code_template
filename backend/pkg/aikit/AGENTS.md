@@ -127,3 +127,50 @@ func CreateOrder(items []Item, userID string) (string, error) {
     return orderID, nil
 }
 ```
+
+## Testutil 设计规范
+
+`internal/testutil/` 是测试基础设施，遵循以下约定.
+
+### 职责边界
+
+- **只放测试工具代码**：环境创建、数据生成、断言辅助、Mock 服务、时间控制、资源隔离.
+- **不放业务逻辑**：任何与具体业务相关的测试属于 `_test.go` 文件，不属于 testutil.
+- **不放特定测试用例**：testutil 只提供可复用的工具函数，不测试具体功能.
+
+### 函数设计
+
+```go
+// NewXxx 带 *testing.T 的环境创建函数，必须调用三件套:
+//   1. t.Helper()     — 错误指向调用者
+//   2. t.Cleanup(fn)  — 测试结束自动清理资源
+//   3. t.Fatalf(err)  — 失败直接终止，不返回 error
+func NewMiniRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
+    t.Helper()
+    mr := miniredis.RunT(t)
+    client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+    t.Cleanup(func() { _ = client.Close() })
+    return mr, client
+}
+```
+
+### 设计原则
+
+| 原则 | 做法 | 反例 |
+|------|------|------|
+| 自动清理 | `t.Cleanup()` 注册资源释放 | 要求调用者手动 `Close()` |
+| 显式依赖 | 返回所有相关对象 | 隐藏 miniredis 只返回 client |
+| 失败即崩溃 | `t.Fatal()` 不返回 error | `return nil, err` 让调用者判断 |
+| 单一职责 | 一个函数做一件事 | `SetupEverything()` 返回 5 个对象 |
+| t.Helper | 所有 `New*` 函数开头调用 | 省略，错误定位到 testutil 内部 |
+
+### 抽取时机
+
+当以下模式在 `_test.go` 中出现 3 次以上，考虑抽取到 testutil:
+
+- 环境搭建样板（创建连接 + 配置 + cleanup）
+- 数据断言重复（状态码检查 + JSON 解析 + 字段比较）
+- 随机标识生成（`uuid.New()` 或 `rand` 组合）
+- Mock 服务搭建（`httptest.NewServer` + handler）
+
+新工具追加到 `testutil.go`，对应测试写入 `testutil_xxx_test.go`. 避免拆分成多文件（除非单文件超过 300 行）.
