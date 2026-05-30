@@ -36,7 +36,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	db := dbmysql.MustNew(&dbmysql.Config{DSN: dsn})
+	// Name 是 aikit Config.Validate 的必填项（Prometheus datasource 标签），
+	// 迁移是一次性 CLI，无需指标插件，故 DisableMetrics.
+	db := dbmysql.MustNew(&dbmysql.Config{DSN: dsn, Name: "migrate", DisableMetrics: true})
 	if err := db.MigrateUp(context.TODO(), migrations, "migrations"); err != nil {
 		log.Error("migrate failed: %v", err)
 		os.Exit(1)
