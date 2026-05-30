@@ -25,11 +25,11 @@
 ./run.sh status                         # 查看状态
 ./run.sh backend start|stop             # 仅操作后端
 ./run.sh frontend start|stop            # 仅操作前端
-./run.sh build                          # 编译后端二进制
+./run.sh build [backend|frontend|all]   # 编译产物（默认 all）
 ./run.sh migrate                        # 执行数据库迁移
-./run.sh test [backend|frontend|all]    # 运行测试（默认 backend）
-./run.sh lint [backend|frontend|all]    # 代码检查（默认 backend）
-./run.sh format [backend|frontend|all]  # 代码格式化（默认 backend）
+./run.sh test [backend|frontend|all]    # 运行测试（默认 all）
+./run.sh lint [backend|frontend|all]    # 代码检查（默认 all）
+./run.sh format [backend|frontend|all]  # 代码格式化（默认 all）
 ./run.sh swagger                        # 生成 Swagger 文档
 ```
 

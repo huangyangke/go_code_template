@@ -16,7 +16,7 @@ internal/
 ├── service/    # Service 层：业务逻辑、事务控制、bcode 错误转换
 ├── dao/        # DAO 层：SQL 操作 (CRUD)
 ├── model/      # Model 层：GORM 表结构、ORM 映射
-│   └── constants/  # Redis Key 模板
+│   └── constants/  # 常量定义，如 Redis Key 模板
 ├── schema/     # DTO：请求/响应结构体
 └── errors/     # 业务错误码（AppError）
 ```

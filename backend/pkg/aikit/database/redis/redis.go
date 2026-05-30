@@ -49,9 +49,12 @@ type (
 		SentinelPassword string        `yaml:"sentinel_password"`
 		DB               int           `yaml:"db"`
 		// DisableKeyPrefix 完全跳过 KeyPrefix 拼接；仅在调用方已自行管理 key 命名空间时使用。
-		DisableKeyPrefix bool         `yaml:"disable_key_prefix"`
-		hooks            []redis.Hook `yaml:"-"` // Redis command hooks
-		logger           logger       `yaml:"-"` // Custom logger
+		DisableKeyPrefix bool `yaml:"disable_key_prefix"`
+		// EnableMetrics 挂载 Prometheus 指标 Hook；零值=关。裸客户端默认不采集，
+		// FastApp 注册时自动置 true（与 MySQL 一致）。启用时 Name 必填。
+		EnableMetrics bool         `yaml:"enable_metrics"`
+		hooks         []redis.Hook `yaml:"-"` // Redis command hooks
+		logger        logger       `yaml:"-"` // Custom logger
 	}
 
 	// Redis Redis 客户端，持有配置与底层 Cmdable 实例.
@@ -97,7 +100,10 @@ func New(c *Config, opts ...Option) (*Redis, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	c.hooks = append([]redis.Hook{NewPrometheusHook(c.Name)}, c.hooks...)
+	// Prometheus 指标 Hook：opt-in（裸客户端默认关，FastApp 注册时启用）.
+	if c.EnableMetrics {
+		c.hooks = append([]redis.Hook{NewPrometheusHook(c.Name)}, c.hooks...)
+	}
 	log.Info("[Redis][connect_start][type=%s][addrs=%v][db=%d]", c.Type, c.Addrs, c.DB)
 
 	if c.logger != nil {
@@ -243,8 +249,8 @@ func (c *Config) Fix() {
 // Validate 校验必填字段，缺少时返回错误.
 // 返回值：err - 缺少必填字段时的错误.
 func (c *Config) Validate() error {
-	if c.Name == "" {
-		return fmt.Errorf("redis: Name is required (used as Prometheus datasource label)")
+	if c.EnableMetrics && c.Name == "" {
+		return fmt.Errorf("redis: Name is required when EnableMetrics is true (used as Prometheus datasource label)")
 	}
 	if len(c.Addrs) < 1 {
 		return fmt.Errorf("redis: no addresses in config")

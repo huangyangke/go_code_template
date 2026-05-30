@@ -75,9 +75,16 @@ func TestConfig_Validate_SentinelNoMaster(t *testing.T) {
 }
 
 func TestConfig_Validate_NoName(t *testing.T) {
-	c := &Config{Addrs: []string{"127.0.0.1:6379"}, Type: StandaloneType}
-	if err := c.Validate(); err == nil {
-		t.Fatal("expected error for empty Name")
+	// Name 仅在启用指标时必填.
+	withMetrics := &Config{Addrs: []string{"127.0.0.1:6379"}, Type: StandaloneType, EnableMetrics: true}
+	if err := withMetrics.Validate(); err == nil {
+		t.Fatal("expected error for empty Name when EnableMetrics=true")
+	}
+
+	// 未启用指标时无 Name 应通过（裸客户端/CLI 场景）.
+	noMetrics := &Config{Addrs: []string{"127.0.0.1:6379"}, Type: StandaloneType}
+	if err := noMetrics.Validate(); err != nil {
+		t.Fatalf("unexpected error when EnableMetrics=false: %v", err)
 	}
 }
 
@@ -96,10 +103,10 @@ func TestConfig_fix_Panics(t *testing.T) {
 	t.Run("no name", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r == nil {
-				t.Fatal("expected panic for empty Name")
+				t.Fatal("expected panic for empty Name when EnableMetrics=true")
 			}
 		}()
-		c := &Config{Addrs: []string{"127.0.0.1:6379"}, Type: StandaloneType}
+		c := &Config{Addrs: []string{"127.0.0.1:6379"}, Type: StandaloneType, EnableMetrics: true}
 		c.Fix()
 		if err := c.Validate(); err != nil {
 			panic(err.Error())

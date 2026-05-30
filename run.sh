@@ -209,8 +209,28 @@ install_frontend() {
 
 # ─── 工具命令 ─────────────────────────────────────────────────────────────────
 
+run_build() {
+    local target="${1:-all}"
+    case "$target" in
+        backend)
+            build_binary
+            ;;
+        frontend)
+            log_info "编译前端产物..."
+            cd "$FRONTEND_DIR" || exit 1
+            command -v pnpm >/dev/null 2>&1 || { log_error "pnpm 未安装"; return 1; }
+            pnpm build
+            ;;
+        all)
+            run_build backend || return 1
+            run_build frontend
+            ;;
+        *) log_error "未知目标：build $target"; return 1 ;;
+    esac
+}
+
 run_tests() {
-    local target="${1:-backend}"
+    local target="${1:-all}"
     case "$target" in
         backend)
             log_info "运行后端测试..."
@@ -231,7 +251,7 @@ run_tests() {
 }
 
 run_lint() {
-    local target="${1:-backend}"
+    local target="${1:-all}"
     case "$target" in
         backend)
             log_info "运行后端代码检查..."
@@ -257,7 +277,7 @@ run_lint() {
 }
 
 run_format() {
-    local target="${1:-backend}"
+    local target="${1:-all}"
     case "$target" in
         backend)
             log_info "格式化后端代码..."
@@ -298,10 +318,12 @@ gen_swagger() {
     log_info "生成 Swagger 文档..."
     cd "$BACKEND_DIR" || exit 1
     if command -v swag >/dev/null 2>&1; then
-        swag init -g cmd/server/main.go -o docs
+        # --parseDependency/--parseInternal：解析 aikit 等外部依赖里的响应类型（如 response.APIResponse）
+        swag init -g cmd/server/main.go -o docs --parseDependency --parseInternal
         log_info "Swagger 文档已生成到 backend/docs/"
     else
-        log_error "swag 未安装，请执行：go install github.com/swaggo/swag/cmd/swag@latest"
+        # 版本须与 go.mod 中 github.com/swaggo/swag 一致，否则生成的 docs.go 编译不过
+        log_error "swag 未安装，请执行：go install github.com/swaggo/swag/cmd/swag@v1.8.12"
         return 1
     fi
 }
@@ -407,16 +429,16 @@ case "${1:-}" in
         esac
         ;;
     build)
-        build_binary || exit 1
+        run_build "${2:-all}" || exit 1
         ;;
     test)
-        run_tests "${2:-backend}"
+        run_tests "${2:-all}"
         ;;
     lint)
-        run_lint "${2:-backend}"
+        run_lint "${2:-all}"
         ;;
     format)
-        run_format "${2:-backend}"
+        run_format "${2:-all}"
         ;;
     migrate)
         run_migrate
@@ -457,10 +479,10 @@ case "${1:-}" in
         echo "  install [backend|frontend|all]  安装依赖（默认 all）"
         echo "  backend  start|stop    仅操作后端"
         echo "  frontend start|stop    仅操作前端"
-        echo "  build                  编译后端二进制"
-        echo "  test   [backend|frontend|all]   运行测试（默认 backend）"
-        echo "  lint   [backend|frontend|all]   代码检查（默认 backend）"
-        echo "  format [backend|frontend|all]   代码格式化（默认 backend）"
+        echo "  build  [backend|frontend|all]   编译产物（默认 all）"
+        echo "  test   [backend|frontend|all]   运行测试（默认 all）"
+        echo "  lint   [backend|frontend|all]   代码检查（默认 all）"
+        echo "  format [backend|frontend|all]   代码格式化（默认 all）"
         echo "  migrate                执行数据库迁移（golang-migrate）"
         echo "  swagger                生成 Swagger 文档"
         echo "  pre-commit-install     安装 Git 提交前检查 hooks"

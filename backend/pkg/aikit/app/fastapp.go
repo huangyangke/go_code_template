@@ -282,6 +282,8 @@ func (a *FastApp) RegisterRedis(name string, cfg *dbredis.Config) *dbredis.Redis
 	if cfg.Name == "" {
 		cfg.Name = a.cfg.Family + "/" + name
 	}
+	// FastApp 管理的实例默认采集 Prometheus 指标（裸 New() 客户端默认不采集）.
+	cfg.EnableMetrics = true
 	rdb := dbredis.MustNew(cfg)
 	a.redisInstances[name] = rdb
 	return rdb
@@ -301,6 +303,8 @@ func (a *FastApp) RegisterMySQL(name string, cfg *dbmysql.Config, opts ...dbmysq
 	if cfg.Name == "" {
 		cfg.Name = a.cfg.Family + "/" + name
 	}
+	// FastApp 管理的实例默认采集 Prometheus 指标（裸 New() 客户端默认不采集）.
+	cfg.EnableMetrics = true
 	db := dbmysql.MustNew(cfg, opts...)
 	a.mysqlInstances[name] = db
 	return db

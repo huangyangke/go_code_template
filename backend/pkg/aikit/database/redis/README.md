@@ -1,6 +1,8 @@
 # redis — go-redis/v9 客户端
 
-go-redis/v9 封装，支持 Standalone / Sentinel / Cluster 三种模式，内置 Prometheus 指标、分布式锁、扩展命令。
+go-redis/v9 封装，支持 Standalone / Sentinel / Cluster 三种模式，内置 Prometheus 指标（可选）、分布式锁、扩展命令。
+
+> **指标按入口区分**：裸 `New()` 客户端默认 **不** 采集 Prometheus 指标（适合 CLI/脚本/非服务调用）；通过 `FastApp.RegisterRedis` 注册的实例自动启用。需手动开启时设 `EnableMetrics: true`（启用后 `Name` 必填，作为指标 datasource 标签）。
 
 ## 用法
 
