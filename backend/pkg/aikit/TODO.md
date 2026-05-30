@@ -2,14 +2,6 @@
 
 ## 高优先级
 
-### Gin 请求超时 middleware
-`app/middleware/` 缺少 request timeout handler。handler 慢或下游阻塞时连接会一直挂，耗尽 worker，是生产最常见的故障模式之一。
-- 新增 `app/middleware/timeout.go`，封装 `context.WithTimeout` + 超时返回 499
-
-### metrics 注册去重
-当前用 `prometheus.MustRegister` 会在重复注册时 panic（`metrics/counter.go:29`、`metrics/gauge.go:30`、`metrics/histogram.go:36`）。多次初始化（测试、热重载）场景下必崩。
-- 改用 `errors.As(err, &are)` 检测 `AlreadyRegisteredError`，已注册则复用已有 collector
-
 ### log/slog 兼容
 Go 1.21+ 的 `log/slog` 已是标准日志接口。gorm、go-redis 等第三方库默认用 slog 输出，当前无法汇入自定义 logger，日志格式割裂。
 - 为 `log/` 包实现 `slog.Handler` 接口，使其可作为 slog 后端使用
