@@ -75,7 +75,6 @@ func main() {
 		cfg := &dbmysql.Config{DSN: dsn}
 		if !cfg.IsSQLite() {
 			loader.MustScan("mysql", cfg)
-			cfg.DSN = dsn // MustScan 会覆盖 DSN，恢复为 db.dsn 的值
 		}
 		a.RegisterMySQL("default", cfg)
 	}
