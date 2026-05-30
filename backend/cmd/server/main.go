@@ -74,11 +74,11 @@ func main() {
 		loader.MustScan("redis", &redisCfg)
 		a.RegisterRedis("default", &redisCfg)
 	}
-
+	// 注册路由
 	a.SetRouteRegistrar(func(e *gin.Engine) {
 		api.RegisterRoutes(e, a.GetMySQL("default"), a.GetRedis("default"))
 	})
-
+	// 启动服务
 	if err := a.Run(); err != nil {
 		log.Error("server error: %v", err)
 		os.Exit(1)

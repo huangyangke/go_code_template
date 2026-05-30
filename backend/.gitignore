@@ -2,6 +2,10 @@ bin/
 logs/
 *.log
 
+# 编译产物（裸二进制，应放 bin/ 或临时构建）
+/server
+/migrate
+
 # 环境变量文件含真实密码，不提交
 # .env.dev / .env.prod 是模板，提交时只保留占位值
 *.env.local
