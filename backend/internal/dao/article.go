@@ -4,61 +4,35 @@ import (
 	"context"
 
 	dbmysql "github.com/huangyangke/go-aikit/database/mysql"
-	"gorm.io/gorm"
 
 	"github.com/example/go-template/internal/model"
 )
 
 // ArticleDAO handles database operations for articles.
+// 内嵌 aikit 泛型 Repository，消除手写 CRUD 样板；
+// 所有方法经 Repository 走 Database.WithContext(ctx)，因此自动复用 ExecTx 注入的事务.
 type ArticleDAO struct {
-	db *gorm.DB
+	*dbmysql.Repository[model.Article]
 }
 
 func NewArticleDAO(database *dbmysql.Database) *ArticleDAO {
-	return &ArticleDAO{db: database.DB}
+	return &ArticleDAO{Repository: dbmysql.NewGenericRepository[model.Article](database)}
 }
 
-func (d *ArticleDAO) List(ctx context.Context, offset, limit int) ([]*model.Article, int64, error) {
-	var articles []*model.Article
-	var total int64
-
-	base := d.db.WithContext(ctx).Model(&model.Article{})
-	if err := base.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	if err := base.Offset(offset).Limit(limit).Find(&articles).Error; err != nil {
-		return nil, 0, err
-	}
-
-	return articles, total, nil
-}
-
-func (d *ArticleDAO) Create(ctx context.Context, article *model.Article) error {
-	return d.db.WithContext(ctx).Create(article).Error
-}
+// List 与 Create 的签名与泛型 Repository 完全一致，经内嵌自动提升，无需重写.
+//
+// 以下三个方法收窄主键类型为 uint：保持 service 依赖接口的类型安全，
+// 仅一行委托给泛型 Repository（其入参为 any）.
 
 func (d *ArticleDAO) GetByID(ctx context.Context, id uint) (*model.Article, error) {
-	var article model.Article
-	if err := d.db.WithContext(ctx).First(&article, id).Error; err != nil {
-		return nil, err
-	}
-	return &article, nil
+	return d.Repository.GetByID(ctx, id)
 }
 
 func (d *ArticleDAO) Update(ctx context.Context, id uint, updates map[string]interface{}) (*model.Article, error) {
-	if err := d.db.WithContext(ctx).Model(&model.Article{}).Where("id = ?", id).Updates(updates).Error; err != nil {
-		return nil, err
-	}
-	return d.GetByID(ctx, id)
+	return d.Repository.Update(ctx, id, updates)
 }
 
 func (d *ArticleDAO) Delete(ctx context.Context, id uint) error {
-	result := d.db.WithContext(ctx).Delete(&model.Article{}, id)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
+	return d.Repository.Delete(ctx, id)
 }
+

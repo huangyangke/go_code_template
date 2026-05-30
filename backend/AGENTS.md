@@ -72,22 +72,42 @@ func (s *ArticleService) Get(ctx context.Context, id uint) (*model.Article, erro
 }
 ```
 
-### DAO 层
+#### 跨 DAO 事务
 
-- 只负责 SQL 操作，不含业务逻辑
-- 接收 `*dbmysql.Database`，取 `.DB` 字段操作
-- `Delete` 需检查 `RowsAffected == 0` 并返回 `gorm.ErrRecordNotFound`
+多个 DAO 写操作需原子提交时，用 `db.ExecTx` 包裹：注入 ctx 的事务会被 DAO（经泛型 Repository → `db.WithContext(ctx)`）自动复用，无需层层传 `*gorm.DB`。返回非 nil error 即整体回滚。
 
 ```go
+// Service 持有 *dbmysql.Database 才能开启事务；DAO 仍只接收 ctx.
+func (s *OrderService) Place(ctx context.Context, o *model.Order) error {
+    return s.db.ExecTx(ctx, func(ctx context.Context) error {
+        if err := s.orderDAO.Create(ctx, o); err != nil {
+            return err // 回滚
+        }
+        return s.stockDAO.Decr(ctx, o.SkuID, o.Qty) // 任一步出错则全部回滚
+    })
+}
+```
+
+### DAO 层
+
+- 只负责数据访问，不含业务逻辑
+- 内嵌 aikit 泛型 `Repository[T]`，免写常规 CRUD：`List`/`Create` 签名一致直接提升；`GetByID`/`Update`/`Delete` 收窄主键为 `uint`，一行委托
+- 经 Repository 走 `Database.WithContext(ctx)`，自动复用 `ExecTx` 注入的事务
+- 泛型 Repository 已内置软删除与 `RowsAffected==0 → gorm.ErrRecordNotFound`，无需手写
+- 仅当需要自定义查询（联表、聚合）时才手写方法，此时取 `database.WithContext(ctx)` 操作
+
+```go
+type ArticleDAO struct {
+    *dbmysql.Repository[model.Article]
+}
+
+func NewArticleDAO(db *dbmysql.Database) *ArticleDAO {
+    return &ArticleDAO{Repository: dbmysql.NewGenericRepository[model.Article](db)}
+}
+
+// 收窄主键类型，一行委托.
 func (d *ArticleDAO) Delete(ctx context.Context, id uint) error {
-    result := d.db.WithContext(ctx).Delete(&model.Article{}, id)
-    if result.Error != nil {
-        return result.Error
-    }
-    if result.RowsAffected == 0 {
-        return gorm.ErrRecordNotFound
-    }
-    return nil
+    return d.Repository.Delete(ctx, id)
 }
 ```
 

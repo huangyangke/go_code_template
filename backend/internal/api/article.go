@@ -28,16 +28,11 @@ func NewArticleHandler(svc *service.ArticleService) *ArticleHandler {
 // @Success     200    {object} response.APIResponse
 // @Router      /v1/articles [get]
 func (h *ArticleHandler) List(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if size < 1 || size > 100 {
-		size = 20
-	}
+	var p schema.Pagination
+	_ = c.ShouldBindQuery(&p)
+	p.Normalize()
 
-	articles, total, err := h.svc.List(c.Request.Context(), page, size)
+	articles, total, err := h.svc.List(c.Request.Context(), p.Page, p.Size)
 	response.JSONErr(c, gin.H{"total": total, "list": articles}, err)
 }
 
