@@ -30,16 +30,21 @@ rate_limit:
   limit: ${RATE_LIMIT_COUNT:100}
   period: ${RATE_LIMIT_PERIOD:minute}
 
-# MySQL 配置
+# 数据库：DSN 前缀自动路由驱动
+#   mysql  → root:pass@tcp(127.0.0.1:3306)/dbname?charset=utf8mb4&parseTime=True&loc=Local
+#   sqlite → sqlite:///data/app.db
+db:
+  dsn: ${DB_DSN:sqlite:///data/app.db}
+
+# MySQL 连接池调优（仅 db.dsn 为 mysql 时生效，sqlite 不需要）
 mysql:
-  dsn: ${MYSQL_DSN}
   max_open_conns: 20
   max_idle_conns: 5
 
-# Redis 配置
+# Redis 配置（不配置 REDIS_ADDR 则跳过注册，本地开发可用 CACHE_TYPE=local 替代）
 redis:
   addrs:
-    - ${REDIS_ADDR:127.0.0.1:6379}
+    - ${REDIS_ADDR:}
   password: ${REDIS_PASSWORD:}
   db: 0
   type: standalone

@@ -9,6 +9,8 @@ import (
 	"github.com/huangyangke/go-aikit/config"
 	dbmysql "github.com/huangyangke/go-aikit/database/mysql"
 	"github.com/huangyangke/go-aikit/log"
+
+	"github.com/example/go-template/internal/model"
 )
 
 //go:embed migrations/*.sql
@@ -30,15 +32,27 @@ func main() {
 		Stdout: true,
 	})
 
-	dsn := loader.GetString("mysql.dsn")
+	dsn := loader.GetString("db.dsn")
 	if dsn == "" {
-		log.Error("mysql.dsn is not configured")
+		log.Error("db.dsn is not configured")
 		os.Exit(1)
 	}
 
-	// Name 是 aikit Config.Validate 的必填项（Prometheus datasource 标签），
-	// 迁移是一次性 CLI，无需指标插件，故 DisableMetrics.
-	db := dbmysql.MustNew(&dbmysql.Config{DSN: dsn, Name: "migrate", DisableMetrics: true})
+	cfg := &dbmysql.Config{DSN: dsn}
+	db := dbmysql.MustNew(cfg)
+
+	// sqlite：GORM AutoMigrate 从 model 结构体建表（.sql 是 MySQL 方言，sqlite 用不了）。
+	// 新增表时把 model 加入下面的列表。
+	if cfg.IsSQLite() {
+		if err := db.AutoMigrate(&model.Article{}); err != nil {
+			log.Error("automigrate failed: %v", err)
+			os.Exit(1)
+		}
+		log.Info("automigrate completed")
+		return
+	}
+
+	// mysql：golang-migrate 跑 migrations/*.sql
 	if err := db.MigrateUp(context.TODO(), migrations, "migrations"); err != nil {
 		log.Error("migrate failed: %v", err)
 		os.Exit(1)

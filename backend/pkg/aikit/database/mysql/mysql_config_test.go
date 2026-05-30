@@ -49,10 +49,16 @@ func TestConfig_Validate_MissingDSN(t *testing.T) {
 }
 
 func TestConfig_Validate_MissingName(t *testing.T) {
-	c := &Config{DSN: "user:pass@tcp(127.0.0.1:3306)/db"}
-	err := c.Validate()
-	if err == nil {
-		t.Fatal("expected error for empty Name")
+	// Name 仅在启用指标时必填.
+	withMetrics := &Config{DSN: "user:pass@tcp(127.0.0.1:3306)/db", EnableMetrics: true}
+	if err := withMetrics.Validate(); err == nil {
+		t.Fatal("expected error for empty Name when EnableMetrics=true")
+	}
+
+	// 未启用指标时无 Name 应通过（裸客户端/CLI 场景）.
+	noMetrics := &Config{DSN: "user:pass@tcp(127.0.0.1:3306)/db"}
+	if err := noMetrics.Validate(); err != nil {
+		t.Fatalf("unexpected error when EnableMetrics=false: %v", err)
 	}
 }
 

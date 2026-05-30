@@ -25,7 +25,7 @@ func newTestDAO(t *testing.T) (*dao.ArticleDAO, *dbmysql.Database) {
 	if dsn == "" {
 		t.Skip("TEST_MYSQL_DSN 未设置，跳过 DAO 集成测试")
 	}
-	db := dbmysql.MustNew(&dbmysql.Config{DSN: dsn, Name: "test", DisableMetrics: true})
+	db := dbmysql.MustNew(&dbmysql.Config{DSN: dsn})
 	return dao.NewArticleDAO(db), db
 }
 

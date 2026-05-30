@@ -5,11 +5,13 @@ go 1.25.0
 require (
 	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/apache/pulsar-client-go v0.11.0
+	github.com/benbjohnson/clock v1.1.0
 	github.com/cloudwego/eino v0.8.13
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/gabriel-vasile/mimetype v1.4.12
 	github.com/gin-contrib/pprof v1.5.4
 	github.com/gin-gonic/gin v1.12.0
+	github.com/glebarez/sqlite v1.11.0
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
@@ -33,7 +35,6 @@ require (
 	golang.org/x/sync v0.20.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.6.0
-	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.1
 )
 
@@ -69,7 +70,6 @@ require (
 	github.com/aliyun/credentials-go v1.4.3 // indirect
 	github.com/ardielle/ardielle-go v1.5.2 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
-	github.com/benbjohnson/clock v1.1.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.4.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect
@@ -90,6 +90,7 @@ require (
 	github.com/dvsekhvalnov/jose2go v1.7.0 // indirect
 	github.com/eino-contrib/jsonschema v1.0.3 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
+	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/go-basic/ipv4 v1.0.0 // indirect
 	github.com/go-ego/gse v0.80.3 // indirect
 	github.com/go-openapi/jsonpointer v0.19.5 // indirect
@@ -120,7 +121,6 @@ require (
 	github.com/linkedin/goavro/v2 v2.9.8 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
 	github.com/mitchellh/mapstructure v1.4.3 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
@@ -137,6 +137,7 @@ require (
 	github.com/prometheus/procfs v0.10.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/slongfield/pyfmt v0.0.0-20220222012616-ea85ff4c361f // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
@@ -169,6 +170,10 @@ require (
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
+	modernc.org/libc v1.22.5 // indirect
+	modernc.org/mathutil v1.5.0 // indirect
+	modernc.org/memory v1.5.0 // indirect
+	modernc.org/sqlite v1.23.1 // indirect
 )
 
 replace github.com/stretchr/testify v1.10.0 => github.com/stretchr/testify v1.9.0

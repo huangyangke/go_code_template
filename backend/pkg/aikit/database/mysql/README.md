@@ -1,6 +1,8 @@
 # mysql — GORM v2 数据库封装
 
-GORM v2 封装，内置熔断插件、Prometheus 指标插件、时间戳自动填充、事务辅助、泛型 Repository。
+GORM v2 封装，内置熔断插件、Prometheus 指标插件（可选）、时间戳自动填充、事务辅助、泛型 Repository。
+
+> **指标按入口区分**：裸 `New()` 客户端默认 **不** 采集 Prometheus 指标（适合 CLI/脚本/迁移等非服务调用）；通过 `FastApp.RegisterMySQL` 注册的实例自动启用。需手动开启时设 `EnableMetrics: true`（启用后 `Name` 必填，作为指标 datasource 标签）。熔断器始终 opt-in（`Breaker` 默认 nil）。
 
 ## 用法
 
@@ -61,12 +63,12 @@ max_open_conns: 20          # 默认
 max_idle_conns: 5           # 默认
 max_lifetime: 600s          # 默认
 debug: false
-name: main                  # 指标 datasource 标签
+name: main                  # 指标 datasource 标签（EnableMetrics 时必填）
 breaker:                    # nil 则不启用
   name: mysql-main
   sleep_window: 5s
   error_percent_threshold: 50
-disable_metrics: false      # 默认启用
+enable_metrics: false       # 默认关：裸 New() 不采集指标；FastApp 注册时自动置 true
 ```
 
 ## 数据库迁移

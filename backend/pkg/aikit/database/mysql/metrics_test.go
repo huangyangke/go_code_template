@@ -46,13 +46,13 @@ func TestBreakerPlugin_Name(t *testing.T) {
 
 func TestConfig_BreakerField(t *testing.T) {
 	cfg := &Config{
-		DSN:            "user:pass@tcp(localhost:3306)/test",
-		Breaker:        nil,
-		DisableMetrics: true,
+		DSN:           "user:pass@tcp(localhost:3306)/test",
+		Breaker:       nil,
+		EnableMetrics: false,
 	}
 	cfg.Fix()
 	assert.Nil(t, cfg.Breaker)
-	assert.True(t, cfg.DisableMetrics)
+	assert.False(t, cfg.EnableMetrics)
 }
 
 func TestConfig_Fix_MaxIdleTime(t *testing.T) {

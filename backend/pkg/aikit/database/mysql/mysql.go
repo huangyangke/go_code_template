@@ -1,11 +1,16 @@
-// Package mysql MySQL 连接与 GORM ORM 封装.
+// Package mysql 数据库连接与 GORM ORM 封装.
 // 提供连接管理、熔断与指标插件、数据库迁移、事务上下文传递.
+// DSN 前缀自动路由驱动：sqlite:///path → glebarez 纯 Go 驱动，其余 → MySQL 驱动.
 package mysql
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -15,17 +20,28 @@ import (
 	"github.com/huangyangke/go-aikit/resilience"
 )
 
-// Config MySQL 连接配置.
+const sqlitePrefix = "sqlite://"
+
+// Config 数据库连接配置.
 type Config struct {
-	DSN            string             `yaml:"dsn"`
-	MaxOpenConns   int                `yaml:"max_open_conns"`
-	MaxIdleConns   int                `yaml:"max_idle_conns"`
-	MaxLifetime    time.Duration      `yaml:"max_lifetime"`
-	MaxIdleTime    time.Duration      `yaml:"max_idle_time"`
-	Debug          bool               `yaml:"debug"`
-	Name           string             `yaml:"name"`            // Datasource name for metrics labels
-	Breaker        *resilience.Config `yaml:"breaker"`         // nil = no circuit breaker
-	DisableMetrics bool               `yaml:"disable_metrics"` // true = no Prometheus metrics plugin
+	DSN           string             `yaml:"dsn"`
+	MaxOpenConns  int                `yaml:"max_open_conns"`
+	MaxIdleConns  int                `yaml:"max_idle_conns"`
+	MaxLifetime   time.Duration      `yaml:"max_lifetime"`
+	MaxIdleTime   time.Duration      `yaml:"max_idle_time"`
+	Debug         bool               `yaml:"debug"`
+	Name          string             `yaml:"name"`           // Datasource name for metrics labels (required when EnableMetrics)
+	Breaker       *resilience.Config `yaml:"breaker"`        // nil = no circuit breaker
+	EnableMetrics bool               `yaml:"enable_metrics"` // true = attach Prometheus metrics plugin. Default off; FastApp 注册时自动置 true.
+
+	// Dialector 可选注入自定义 GORM 方言。非 nil 时优先于 DSN，仅可编程设置，不从 yaml 解析。
+	// 一般无需使用——DSN 前缀 sqlite:// 自动路由到 sqlite 驱动。
+	Dialector gorm.Dialector `yaml:"-"`
+}
+
+// IsSQLite 判断 DSN 是否为 sqlite 连接串（sqlite:// 前缀）.
+func (c *Config) IsSQLite() bool {
+	return strings.HasPrefix(c.DSN, sqlitePrefix)
 }
 
 // Fix 填充零值字段的默认值.
@@ -47,10 +63,10 @@ func (c *Config) Fix() {
 // Validate 校验必填字段，缺少时返回错误.
 // 返回值：err - 缺少必填字段时的错误.
 func (c *Config) Validate() error {
-	if c.Name == "" {
-		return fmt.Errorf("mysql: Name is required (used as Prometheus datasource label)")
+	if c.EnableMetrics && c.Name == "" {
+		return fmt.Errorf("mysql: Name is required when EnableMetrics is true (used as Prometheus datasource label)")
 	}
-	if c.DSN == "" {
+	if c.Dialector == nil && c.DSN == "" {
 		return fmt.Errorf("mysql: DSN is required")
 	}
 	return nil
@@ -64,14 +80,15 @@ func (c *Config) MustValidate() {
 }
 
 // Model 所有 ORM 模型的基础模型，包含主键与软删除.
+// 时间戳由 TimestampPlugin 在应用层写入，故不设 DB 级默认值，保证跨方言（MySQL/sqlite）可移植.
 type Model struct {
 	ID        uint           `gorm:"primaryKey;autoIncrement" json:"id"`
-	CreatedAt time.Time      `gorm:"not null;default:CURRENT_TIMESTAMP" json:"created_at"`
-	UpdatedAt time.Time      `gorm:"not null;default:CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" json:"updated_at"`
+	CreatedAt time.Time      `gorm:"not null" json:"created_at"`
+	UpdatedAt time.Time      `gorm:"not null" json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"` // Soft delete
 }
 
-// Database MySQL 数据库连接，封装 GORM 实例.
+// Database 数据库连接，封装 GORM 实例.
 type Database struct {
 	DB  *gorm.DB
 	cfg *Config
@@ -116,7 +133,8 @@ func WithSkipDefaultTransaction(skip bool) Option {
 	}
 }
 
-// New 创建 MySQL 数据库连接，出错时 panic.
+// New 创建数据库连接.
+// DSN 前缀自动路由驱动：sqlite:///path → 纯 Go sqlite 驱动，其余 → MySQL 驱动.
 // 参数：c - 连接配置, opts - GORM 配置选项.
 // 返回值：*Database - 数据库实例.
 func New(c *Config, opts ...Option) (*Database, error) {
@@ -124,7 +142,14 @@ func New(c *Config, opts ...Option) (*Database, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	log.Info("[MySQL][connect_start][debug=%t][max_open=%d][max_idle=%d]", c.Debug, c.MaxOpenConns, c.MaxIdleConns)
+
+	isSQLite := c.IsSQLite()
+	driverName := "mysql"
+	if isSQLite {
+		driverName = "sqlite"
+	}
+	log.Info("[DB][connect_start][driver=%s][debug=%t][max_open=%d][max_idle=%d]",
+		driverName, c.Debug, c.MaxOpenConns, c.MaxIdleConns)
 
 	gormConfig := &gorm.Config{}
 	for _, opt := range opts {
@@ -135,51 +160,70 @@ func New(c *Config, opts ...Option) (*Database, error) {
 		gormConfig.Logger = logger.Default.LogMode(logger.Silent)
 	}
 
-	db, err := gorm.Open(mysql.Open(c.DSN), gormConfig)
+	// Dialector 注入 > DSN 前缀路由 > 默认 MySQL
+	dialector := c.Dialector
+	if dialector == nil {
+		if isSQLite {
+			path := strings.TrimPrefix(c.DSN, sqlitePrefix)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return nil, fmt.Errorf("mysql: create sqlite dir: %w", err)
+			}
+			dialector = sqlite.Open(path)
+		} else {
+			dialector = mysql.Open(c.DSN)
+		}
+	}
+
+	db, err := gorm.Open(dialector, gormConfig)
 	if err != nil {
-		log.Error("[MySQL][open_error]: %v", err)
+		log.Error("[DB][open_error][driver=%s]: %v", driverName, err)
 		return nil, fmt.Errorf("mysql: open error: %v", err)
 	}
 
 	sqlDB, err := db.DB()
 	if err != nil {
-		log.Error("[MySQL][underlying_db_error]: %v", err)
+		log.Error("[DB][underlying_db_error]: %v", err)
 		return nil, fmt.Errorf("mysql: get underlying sql.DB error: %v", err)
 	}
 
-	sqlDB.SetMaxOpenConns(c.MaxOpenConns)
-	sqlDB.SetMaxIdleConns(c.MaxIdleConns)
-	sqlDB.SetConnMaxLifetime(c.MaxLifetime)
-	sqlDB.SetConnMaxIdleTime(c.MaxIdleTime)
+	if isSQLite {
+		// sqlite 单文件不需要连接池
+		sqlDB.SetMaxOpenConns(1)
+	} else {
+		sqlDB.SetMaxOpenConns(c.MaxOpenConns)
+		sqlDB.SetMaxIdleConns(c.MaxIdleConns)
+		sqlDB.SetConnMaxLifetime(c.MaxLifetime)
+		sqlDB.SetConnMaxIdleTime(c.MaxIdleTime)
+	}
 
 	if err := sqlDB.Ping(); err != nil {
-		log.Error("[MySQL][ping_error]: %v", err)
+		log.Error("[DB][ping_error]: %v", err)
 		return nil, fmt.Errorf("mysql: ping error: %v", err)
 	}
 
 	// Register timestamp plugin
 	if err := db.Use(&TimestampPlugin{}); err != nil {
-		log.Error("[MySQL][timestamp_plugin_error]: %v", err)
+		log.Error("[DB][timestamp_plugin_error]: %v", err)
 		return nil, fmt.Errorf("mysql: timestamp plugin error: %v", err)
 	}
 
 	// Register circuit breaker plugin (optional)
 	if c.Breaker != nil {
 		if err := db.Use(NewBreakerPlugin(*c.Breaker)); err != nil {
-			log.Error("[MySQL][breaker_plugin_error]: %v", err)
+			log.Error("[DB][breaker_plugin_error]: %v", err)
 			return nil, fmt.Errorf("mysql: breaker plugin error: %v", err)
 		}
 	}
 
-	// Register metrics plugin (default: enabled)
-	if !c.DisableMetrics {
+	// Register metrics plugin (opt-in: default off, FastApp 注册时自动启用)
+	if c.EnableMetrics {
 		if err := db.Use(NewMetricsPlugin(c.Name)); err != nil {
-			log.Error("[MySQL][metrics_plugin_error]: %v", err)
+			log.Error("[DB][metrics_plugin_error]: %v", err)
 			return nil, fmt.Errorf("mysql: metrics plugin error: %v", err)
 		}
 	}
 
-	log.Info("[MySQL][connected][debug=%t]", c.Debug)
+	log.Info("[DB][connected][driver=%s][debug=%t]", driverName, c.Debug)
 	return &Database{DB: db, cfg: c}, nil
 }
 
@@ -193,7 +237,7 @@ func MustNew(c *Config, opts ...Option) *Database {
 	return db
 }
 
-// Close 关闭 MySQL 连接.
+// Close 关闭数据库连接.
 // 返回值：err - 关闭失败时的错误.
 func (d *Database) Close() error {
 	if d.DB == nil {
@@ -202,15 +246,15 @@ func (d *Database) Close() error {
 
 	sqlDB, err := d.DB.DB()
 	if err != nil {
-		log.Error("[MySQL][close_underlying_db_error]: %v", err)
+		log.Error("[DB][close_underlying_db_error]: %v", err)
 		return err
 	}
 
 	if err := sqlDB.Close(); err != nil {
-		log.Error("[MySQL][close_error]: %v", err)
+		log.Error("[DB][close_error]: %v", err)
 		return err
 	}
-	log.Info("[MySQL][closed]")
+	log.Info("[DB][closed]")
 	return nil
 }
 
