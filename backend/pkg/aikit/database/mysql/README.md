@@ -30,14 +30,28 @@ db.ExecTx(ctx, func(ctx context.Context) error {
 
 ## 泛型 Repository
 
-```go
-repo := dbmysql.NewGenericRepository[User](db.DB)
+消除每个模型重复的 CRUD 样板。方法均 ctx-aware：若 ctx 由 `ExecTx` 注入了事务，则自动在该事务内执行，因此可无缝组合到事务中。
 
-user, _ := repo.FindByID(1)
-users, _ := repo.FindWhere("age > ?", 18)
-count, _ := repo.Count("active = ?", true)
-repo.Transaction(func(tx *gorm.DB) error { ... })
+```go
+repo := dbmysql.NewGenericRepository[User](db) // 传 *Database，非 *gorm.DB
+
+user, _ := repo.GetByID(ctx, 1)
+users, _ := repo.FindWhere(ctx, "age > ?", 18)
+items, total, _ := repo.List(ctx, 0, 20)        // 分页：offset, limit
+count, _ := repo.Count(ctx, "active = ?", true) // 条件为 nil 时统计全部
+repo.Create(ctx, &user)
+updated, _ := repo.Update(ctx, 1, map[string]any{"name": "new"})
+repo.Delete(ctx, 1)                              // 模型含 gorm.DeletedAt 时为软删除
+
+// 与事务组合：Repository 自动复用 ctx 中的事务
+db.ExecTx(ctx, func(ctx context.Context) error {
+    repo.Create(ctx, &order)
+    repo.Update(ctx, invID, map[string]any{"stock": gorm.Expr("stock - 1")})
+    return nil // 返回非 nil 则整体回滚
+})
 ```
+
+未找到记录时 `GetByID`/`Update`/`Delete` 返回 `gorm.ErrRecordNotFound`。
 
 ## 配置
 
