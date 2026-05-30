@@ -760,12 +760,13 @@ func (l *ConfigLoader) substituteString(s string) interface{} {
 		parts := varPattern.FindStringSubmatch(s)
 		if len(parts) >= 2 {
 			key := parts[1]
-			defaultVal := ""
-			if len(parts) >= 3 {
+			var defaultVal string
+			hasDefault := len(parts) >= 3
+			if hasDefault {
 				defaultVal = parts[2]
 			}
 
-			value := l.resolveValue(key, defaultVal)
+			value := l.resolveValue(key, defaultVal, hasDefault)
 			if value == nil {
 				return s // 未解析时保留原占位符，交由循环引用检测处理
 			}
@@ -778,12 +779,13 @@ func (l *ConfigLoader) substituteString(s string) interface{} {
 		parts := varPattern.FindStringSubmatch(match)
 		if len(parts) >= 2 {
 			key := parts[1]
-			defaultVal := ""
-			if len(parts) >= 3 {
+			var defaultVal string
+			hasDefault := len(parts) >= 3
+			if hasDefault {
 				defaultVal = parts[2]
 			}
 
-			value := l.resolveValue(key, defaultVal)
+			value := l.resolveValue(key, defaultVal, hasDefault)
 			if value == nil {
 				return match // 未解析时保留原占位符
 			}
@@ -795,7 +797,7 @@ func (l *ConfigLoader) substituteString(s string) interface{} {
 
 // resolveValue 按固定优先级解析占位符的值: config -> environment variable -> default.
 // 当没有找到值且没有默认值时，返回 nil.
-func (l *ConfigLoader) resolveValue(key string, defaultVal string) interface{} {
+func (l *ConfigLoader) resolveValue(key string, defaultVal string, hasDefault bool) interface{} {
 	// 1. 先从当前配置树中读取，支持 ${database.host} 这种跨字段引用
 	configValue := l.navigatePath(l.config, key)
 	if configValue != nil {
@@ -813,8 +815,10 @@ func (l *ConfigLoader) resolveValue(key string, defaultVal string) interface{} {
 		return val
 	}
 
-	// 3. 最后使用默认值; 没有默认值时返回 nil
-	if defaultVal == "" {
+	// 3. 最后使用默认值
+	// hasDefault 区分 ${VAR}（未提供默认值）和 ${VAR:}（默认值为空字符串），
+	// 前者返回 nil 保留占位符，后者返回空字符串完成替换。
+	if !hasDefault {
 		return nil
 	}
 	return defaultVal
