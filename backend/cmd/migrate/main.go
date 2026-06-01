@@ -10,7 +10,7 @@ import (
 	dbmysql "github.com/huangyangke/go-aikit/database/mysql"
 	"github.com/huangyangke/go-aikit/log"
 
-	"github.com/example/go-template/internal/model"
+	"github.com/huangyangke/go_code_template/backend/internal/model"
 )
 
 //go:embed migrations/*.sql

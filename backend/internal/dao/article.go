@@ -5,7 +5,7 @@ import (
 
 	dbmysql "github.com/huangyangke/go-aikit/database/mysql"
 
-	"github.com/example/go-template/internal/model"
+	"github.com/huangyangke/go_code_template/backend/internal/model"
 )
 
 // ArticleDAO handles database operations for articles.

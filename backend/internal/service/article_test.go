@@ -8,10 +8,10 @@ import (
 	"github.com/stretchr/testify/mock"
 	"gorm.io/gorm"
 
-	apperrors "github.com/example/go-template/internal/errors"
-	"github.com/example/go-template/internal/model"
-	"github.com/example/go-template/internal/schema"
-	"github.com/example/go-template/internal/service"
+	apperrors "github.com/huangyangke/go_code_template/backend/internal/errors"
+	"github.com/huangyangke/go_code_template/backend/internal/model"
+	"github.com/huangyangke/go_code_template/backend/internal/schema"
+	"github.com/huangyangke/go_code_template/backend/internal/service"
 )
 
 type mockRepo struct{ mock.Mock }

@@ -3,7 +3,7 @@ package errors_test
 import (
 	"testing"
 
-	apperrors "github.com/example/go-template/internal/errors"
+	apperrors "github.com/huangyangke/go_code_template/backend/internal/errors"
 )
 
 // Compile-time interface assertion.

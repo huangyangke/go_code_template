@@ -6,9 +6,9 @@ import (
 
 	"gorm.io/gorm"
 
-	apperrors "github.com/example/go-template/internal/errors"
-	"github.com/example/go-template/internal/model"
-	"github.com/example/go-template/internal/schema"
+	apperrors "github.com/huangyangke/go_code_template/backend/internal/errors"
+	"github.com/huangyangke/go_code_template/backend/internal/model"
+	"github.com/huangyangke/go_code_template/backend/internal/schema"
 )
 
 type articleRepository interface {

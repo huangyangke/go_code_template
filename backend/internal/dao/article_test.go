@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/example/go-template/internal/dao"
-	"github.com/example/go-template/internal/model"
+	"github.com/huangyangke/go_code_template/backend/internal/dao"
+	"github.com/huangyangke/go_code_template/backend/internal/model"
 )
 
 // DAO 集成测试需要真实 MySQL：设置 TEST_MYSQL_DSN 后运行，否则跳过.

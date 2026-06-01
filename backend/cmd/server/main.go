@@ -13,11 +13,11 @@ import (
 	dbredis "github.com/huangyangke/go-aikit/database/redis"
 	"github.com/huangyangke/go-aikit/log"
 
-	"github.com/example/go-template/internal/api"
+	"github.com/huangyangke/go_code_template/backend/internal/api"
 
 	// 空导入 docs 包：触发其 init() 注册 swagger spec，供 /swagger/index.html 加载。
 	// 由 `./run.sh swagger` 生成，修改接口注解后需重新生成。
-	_ "github.com/example/go-template/docs"
+	_ "github.com/huangyangke/go_code_template/backend/docs"
 )
 
 // @title       Go Template API

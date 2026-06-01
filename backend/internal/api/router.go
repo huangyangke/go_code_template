@@ -3,8 +3,8 @@ package api
 import (
 	"github.com/gin-gonic/gin"
 
-	"github.com/example/go-template/internal/dao"
-	"github.com/example/go-template/internal/service"
+	"github.com/huangyangke/go_code_template/backend/internal/dao"
+	"github.com/huangyangke/go_code_template/backend/internal/service"
 	dbmysql "github.com/huangyangke/go-aikit/database/mysql"
 	dbredis "github.com/huangyangke/go-aikit/database/redis"
 )
