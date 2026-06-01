@@ -168,7 +168,7 @@ var ErrArticleNotFound = &AppError{http.StatusNotFound, 10100, "文章不存在"
 
 ---
 
-## 六、配置管理
+## 五、配置管理
 
 ```
 configs/
@@ -180,14 +180,14 @@ configs/
 通过 `pkg/aikit/config` 加载，支持 YAML + 环境变量 + 热重载：
 
 ```go
-loader.GetString("app.family", "go-template")
+loader.GetString("app.family")
 loader.GetInt("app.port", 8080)
 loader.Scan("mysql", &mysqlCfg)
 ```
 
 ---
 
-## 七、测试规范
+## 六、测试规范
 
 ### 测试分层
 
@@ -215,7 +215,7 @@ func TestArticleService_Get_NotFound(t *testing.T) {
 
 ---
 
-## 八、注释风格
+## 七、注释风格
 
 - 语言：中文，标点末尾 ASCII `.`
 - 导出类型/函数必须有 godoc 注释
