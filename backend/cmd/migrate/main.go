@@ -28,7 +28,7 @@ func main() {
 
 	log.Init(&log.Config{
 		Level:  loader.GetString("log.level", "info"),
-		Family: loader.GetString("app.family", "go-template"),
+		Family: loader.GetString("app.family"),
 		Stdout: true,
 	})
 
@@ -42,9 +42,9 @@ func main() {
 	db := dbmysql.MustNew(cfg)
 
 	// sqlite：GORM AutoMigrate 从 model 结构体建表（.sql 是 MySQL 方言，sqlite 用不了）。
-	// 新增表时把 model 加入下面的列表。
+	// 新增表时在 internal/model/registry.go 的 All 列表追加 model.
 	if cfg.IsSQLite() {
-		if err := db.AutoMigrate(&model.Article{}); err != nil {
+		if err := db.AutoMigrate(model.All...); err != nil {
 			log.Error("automigrate failed: %v", err)
 			os.Exit(1)
 		}

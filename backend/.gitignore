@@ -12,3 +12,6 @@ data/
 # 环境变量文件含真实密码，不提交
 # .env.dev / .env.prod 是模板，提交时只保留占位值
 *.env.local
+
+# Swagger 生成产物，由 build 自动生成，不提交
+docs/

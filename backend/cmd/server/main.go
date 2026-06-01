@@ -73,6 +73,7 @@ func main() {
 	// 初始化数据库：DB_DSN 支持 mysql DSN 或 sqlite:///path 前缀，aikit 自动路由驱动
 	if dsn := loader.GetString("db.dsn"); dsn != "" {
 		cfg := &dbmysql.Config{DSN: dsn}
+		// mysql 额外配置
 		if !cfg.IsSQLite() {
 			loader.MustScan("mysql", cfg)
 		}

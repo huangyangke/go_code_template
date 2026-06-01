@@ -84,6 +84,12 @@ build_binary() {
     log_info "编译 Go 二进制..."
     mkdir -p "$BACKEND_DIR/bin"
     cd "$BACKEND_DIR" || exit 1
+    if command -v swag >/dev/null 2>&1; then
+        swag init -g cmd/server/main.go -o docs --parseDependency --parseInternal
+    else
+        log_error "swag 未安装，请执行：go install github.com/swaggo/swag/cmd/swag@v1.8.12"
+        return 1
+    fi
     if go build -o "$BINARY_PATH" "$MAIN_PKG"; then
         log_info "编译完成：$BINARY_PATH"
     else

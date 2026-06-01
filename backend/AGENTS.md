@@ -16,7 +16,6 @@ internal/
 ├── service/    # Service 层：业务逻辑、事务控制、bcode 错误转换
 ├── dao/        # DAO 层：SQL 操作 (CRUD)
 ├── model/      # Model 层：GORM 表结构、ORM 映射
-│   └── constants/  # 常量定义，如 Redis Key 模板
 ├── schema/     # DTO：请求/响应结构体
 └── errors/     # 业务错误码（AppError）
 ```
@@ -159,21 +158,7 @@ var ErrArticleNotFound = &AppError{http.StatusNotFound, 10100, "文章不存在"
 
 ---
 
-## 四、Redis Key 规范
-
-Key 模板定义在 `internal/model/constants/redis_key.go`，key 与 TTL 绑定：
-
-```go
-var KeyArticle = NewKey("go-template:article:%d", 5*time.Minute)
-
-// 使用
-key := constants.KeyArticle.Format(articleID)   // 生成 key 字符串
-ttl := constants.KeyArticle.TTL                 // 取 TTL
-```
-
----
-
-## 五、数据库迁移
+## 四、数据库迁移
 
 迁移文件放在 `cmd/migrate/migrations/`，格式：`{序号}_{描述}.up.sql` / `.down.sql`。
 
