@@ -13,6 +13,7 @@ import (
 	"github.com/cloudwego/eino/components/embedding"
 )
 
+// 编译断言 确保Embedder实现了接口embedding.Embedder.
 var _ embedding.Embedder = (*Embedder)(nil)
 
 // Config Embedder 配置.

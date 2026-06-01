@@ -142,7 +142,7 @@ func (e *EinoRetriever) Retrieve(ctx context.Context, query string, opts ...retr
 		return nil, nil
 	}
 
-	results, err := e.client.Search(ctx, toFloat32(vecs[0]), e.topK, e.filters)
+	results, err := e.client.Search(ctx, toFloat32(vecs[0]), query, e.topK, e.filters)
 	if err != nil {
 		return nil, err
 	}

@@ -3,8 +3,10 @@ package vectordb
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
+	"github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 )
 
@@ -16,8 +18,10 @@ import (
 //	meta_data   — Json, FILTER
 //	sparse_vector — SparseVector, SPARSE_INVERTED (仅 hybrid 模式)
 type Client struct {
-	cfg Config
-	cli *tcvectordb.RpcClient
+	cfg    Config
+	cli    *tcvectordb.RpcClient
+	bm25   encoder.SparseEncoder
+	bm25mu sync.Mutex
 }
 
 // New 创建向量数据库 Client.
@@ -43,6 +47,21 @@ func New(cfg Config) (*Client, error) {
 	}
 
 	return &Client{cfg: cfg, cli: cli}, nil
+}
+
+// bm25Encoder 懒加载 BM25 编码器（仅 hybrid 模式使用）.
+func (c *Client) bm25Encoder() (encoder.SparseEncoder, error) {
+	c.bm25mu.Lock()
+	defer c.bm25mu.Unlock()
+	if c.bm25 != nil {
+		return c.bm25, nil
+	}
+	enc, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: "zh"})
+	if err != nil {
+		return nil, fmt.Errorf("vectordb: init bm25: %w", err)
+	}
+	c.bm25 = enc
+	return enc, nil
 }
 
 // Close 关闭底层 RPC 连接.
@@ -153,11 +172,20 @@ type UpsertResult struct {
 // 参数：ctx - 上下文, docs - 文档列表, filters - 合并到每个 doc MetaData 的过滤字段.
 // 返回值：UpsertResult, err - 操作失败时的错误.
 func (c *Client) Upsert(ctx context.Context, docs []Doc, filters map[string]any) (*UpsertResult, error) {
+	var enc encoder.SparseEncoder
+	if c.cfg.SearchType == SearchTypeHybrid {
+		var err error
+		enc, err = c.bm25Encoder()
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	tDocs := make([]tcvectordb.Document, 0, len(docs))
 	ids := make([]string, 0, len(docs))
 
 	for _, d := range docs {
-		td, id := c.toTencentDoc(d, filters)
+		td, id := c.toTencentDoc(d, filters, enc)
 		tDocs = append(tDocs, td)
 		ids = append(ids, id)
 	}
@@ -170,7 +198,7 @@ func (c *Client) Upsert(ctx context.Context, docs []Doc, filters map[string]any)
 	return &UpsertResult{IDs: ids, AffectedCount: res.AffectedCount}, nil
 }
 
-func (c *Client) toTencentDoc(d Doc, filters map[string]any) (tcvectordb.Document, string) {
+func (c *Client) toTencentDoc(d Doc, filters map[string]any, enc encoder.SparseEncoder) (tcvectordb.Document, string) {
 	cleaned := cleanContent(d.Content)
 
 	meta := make(map[string]any)
@@ -197,6 +225,12 @@ func (c *Client) toTencentDoc(d Doc, filters map[string]any) (tcvectordb.Documen
 		Fields: fields,
 	}
 
+	if enc != nil {
+		if sv, err := enc.EncodeText(cleaned); err == nil {
+			td.SparseVector = sv
+		}
+	}
+
 	return td, docID
 }
 
@@ -213,11 +247,19 @@ type SearchResult struct {
 
 // Search 根据配置的 SearchType 自动选择 vector 或 hybrid 搜索。
 // Search 根据配置的 SearchType 自动选择 vector 或 hybrid 搜索.
-// 参数：ctx - 上下文, queryEmbedding - 查询向量, limit - 返回数量上限, filters - 过滤条件.
+// 参数：ctx - 上下文, queryEmbedding - 查询向量, query - 原始查询文本（hybrid 模式用于 BM25 编码）, limit - 返回数量上限, filters - 过滤条件.
 // 返回值：SearchResult 列表, err - 搜索失败时的错误.
-func (c *Client) Search(ctx context.Context, queryEmbedding []float32, limit int, filters map[string]any) ([]SearchResult, error) {
+func (c *Client) Search(ctx context.Context, queryEmbedding []float32, query string, limit int, filters map[string]any) ([]SearchResult, error) {
 	if c.cfg.SearchType == SearchTypeHybrid {
-		return c.HybridSearch(ctx, queryEmbedding, nil, limit, filters)
+		enc, err := c.bm25Encoder()
+		if err != nil {
+			return nil, err
+		}
+		sv, err := enc.EncodeQuery(query)
+		if err != nil {
+			return nil, fmt.Errorf("vectordb: bm25 encode query: %w", err)
+		}
+		return c.HybridSearch(ctx, queryEmbedding, sv, limit, filters)
 	}
 	return c.VectorSearch(ctx, queryEmbedding, limit, filters)
 }

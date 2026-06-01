@@ -12,11 +12,8 @@ func cleanContent(content string) string {
 	return strings.ReplaceAll(content, "\x00", "�")
 }
 
-// computeDocID 计算确定性文档 ID，与 Python 版 _compute_doc_id 完全一致。
+// computeDocID 计算确定性文档 ID.
 // partition_fields 指定的 key 参与 hash 以区分不同分区。
-//
-// Python json.dumps 默认使用 separators=(', ', ': ')，Go json.Marshal 使用紧凑格式，
-// 因此这里需要手动添加空格以保持跨语言一致性。
 func computeDocID(content string, meta map[string]any, partitionFields []string) string {
 	var extra []map[string]any
 	for _, k := range partitionFields {
@@ -27,47 +24,18 @@ func computeDocID(content string, meta map[string]any, partitionFields []string)
 
 	var idKey string
 	if len(extra) > 0 {
-		idKey = pythonJSONDumps(content, extra)
+		parts := make([]any, 0, 1+len(extra))
+		parts = append(parts, content)
+		for _, e := range extra {
+			parts = append(parts, e)
+		}
+		b, _ := json.Marshal(parts)
+		idKey = string(b)
 	} else {
 		idKey = content
 	}
 
 	return fmt.Sprintf("%x", md5.Sum([]byte(idKey)))
-}
-
-// pythonJSONDumps 生成与 Python json.dumps([content, {k:v}, ...], ensure_ascii=False)
-// 一致的输出。Python 默认 separators=(', ', ': ')。
-func pythonJSONDumps(content string, extras []map[string]any) string {
-	var b strings.Builder
-	b.WriteByte('[')
-	b.WriteString(jsonString(content))
-	for _, extra := range extras {
-		b.WriteString(", ")
-		b.WriteByte('{')
-		first := true
-		for k, v := range extra {
-			if !first {
-				b.WriteString(", ")
-			}
-			first = false
-			b.WriteString(jsonString(k))
-			b.WriteString(": ")
-			b.WriteString(jsonValue(v))
-		}
-		b.WriteByte('}')
-	}
-	b.WriteByte(']')
-	return b.String()
-}
-
-func jsonString(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b)
-}
-
-func jsonValue(v any) string {
-	b, _ := json.Marshal(v)
-	return string(b)
 }
 
 // buildFilterExpr 构建腾讯云向量数据库的过滤表达式 (meta_data.field = ...)。

@@ -88,7 +88,7 @@ func main() {
 	fmt.Printf("upsert ok: affected=%d\n", result.AffectedCount)
 
 	// 搜索
-	query := "什么是向量数据库"
+	query := "人工智能是模拟人类智能的技术"
 	if len(os.Args) > 1 {
 		query = os.Args[1]
 	}
@@ -103,7 +103,7 @@ func main() {
 		queryVec32[i] = float32(v)
 	}
 
-	hits, err := vdb.Search(ctx, queryVec32, 3, nil)
+	hits, err := vdb.Search(ctx, queryVec32, query, 3, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "search failed: %v\n", err)
 		os.Exit(1)

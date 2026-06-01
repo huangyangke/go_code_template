@@ -1,8 +1,8 @@
-# embedding — Shanhai/OpenAI 兼容 Embedding 客户端
+# embedding — Shanhai Embedding 客户端
 
 实现 [eino](https://github.com/cloudwego/eino) 框架的 `embedding.Embedder` 接口。
 
-兼容所有 OpenAI Embedding API 格式的服务（Shanhai、DashScope、OpenAI 等）。
+专为山海（Shanhai）私有 Embedding API 设计，**不兼容**标准 OpenAI Embedding 格式。
 
 ## 使用
 
@@ -50,5 +50,3 @@ retriever := vectordb.NewEinoRetriever(vdbClient, emb, vectordb.WithTopK(10))
 | 服务 | base_url | model |
 |------|----------|-------|
 | Shanhai | `https://linghub.shuziwenbo.cn/v1` | `shanhai-embedding` |
-| DashScope | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `text-embedding-v4` |
-| OpenAI | `https://api.openai.com/v1` | `text-embedding-3-small` |

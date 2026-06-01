@@ -20,9 +20,8 @@ func TestComputeDocID_NoPartition(t *testing.T) {
 func TestComputeDocID_WithPartition(t *testing.T) {
 	meta := map[string]any{"is_qa": 1, "field": "universal"}
 	id := computeDocID("你好", meta, []string{"is_qa"})
-	// Python: json.dumps(["你好", {"is_qa": 1}], ensure_ascii=False) = '["你好", {"is_qa": 1}]'
-	// md5 = e50a9b611c7cdf8b7fc0f9f9905991ee
-	assert.Equal(t, "e50a9b611c7cdf8b7fc0f9f9905991ee", id)
+	// json.Marshal(["你好", {"is_qa": 1}]) = '["你好",{"is_qa":1}]'
+	assert.Equal(t, "0bc0db488f8ce8f87e4802729be909be", id)
 
 	// 同样 meta 同样 content 应该得到相同 id
 	id2 := computeDocID("你好", meta, []string{"is_qa"})

@@ -49,7 +49,6 @@
 - `backend/internal/api/article.go` 是示例实现，参考该示例开发其他功能
 - 开发步骤：**小功能完整闭环迭代**，测试驱动开发 → 完整功能实现 → review → 提交 → 重启服务 → 人工 check → 再做下一个功能
 - 新增表结构变更时，在 `backend/cmd/migrate/migrations/` 下创建迁移文件，然后执行 `./run.sh migrate`
-- 每一次我的指令你觉得模棱两可，向我提问，明确需求再行动
 
 ---
 
